@@ -7,6 +7,7 @@ use termwiz::escape::parser::Parser;
 use termwiz::escape::Action::{self, Control, Print};
 use termwiz::escape::ControlCode::LineFeed;
 use termwiz::escape::CSI;
+use termwiz::input::{InputEvent, KeyCode, KeyEvent};
 use termwiz::surface::Change;
 use termwiz::terminal::buffered::BufferedTerminal;
 use termwiz::terminal::{new_terminal, Terminal};
@@ -92,7 +93,7 @@ fn main() -> Result<(), Error> {
     let mut stdin = stdin();
     let size = term.terminal().get_screen_size()?;
     let mut parser = Parser::new();
-    // TODO - move reading to Document::render
+    // TODO - move reading and parsing to Document::render
     let mut buf = vec![];
     let read = stdin.read_to_end(&mut buf)?;
     let mut text = String::new();
@@ -127,9 +128,40 @@ fn main() -> Result<(), Error> {
         };
     });
     let mut doc = Document { text, attrs };
-    term.add_changes(doc.render(0, size.rows - 2, size.cols)?.0);
+    let (changes, mut last_rendered) = doc.render(0, size.rows - 2, size.cols)?;
+    term.add_changes(changes);
     term.flush()?;
 
+    loop {
+        match term.terminal().poll_input(None) {
+            Ok(Some(input)) => match input {
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Escape,
+                    ..
+                }) => {
+                    break;
+                }
+                InputEvent::Key(KeyEvent {
+                    key: KeyCode::Char(' '),
+                    ..
+                }) => {
+                    let (changes, amount_rendered) =
+                        doc.render(last_rendered, size.rows - 2, size.cols)?;
+                    last_rendered += amount_rendered;
+                    term.add_changes(changes);
+                    term.flush()?;
+                }
+                _ => {
+                    print!("{:?}\r\n", input);
+                }
+            },
+            Ok(None) => {}
+            Err(e) => {
+                print!("{:?}\r\n", e);
+                break;
+            }
+        }
+    }
     Ok(())
 }
 
