@@ -14,7 +14,6 @@ use termwiz::Error;
 
 struct Document {
     text: String,
-    // Make list of change instead of CellAttributes?
     attrs: Vec<(usize, Change)>,
 }
 
@@ -51,10 +50,6 @@ impl Document {
         let mut cells_in_line = 0;
         loop {
             if let Some((grapheme, cells)) = graphemes.next() {
-                while attr_index < self.attrs.len() && text_idx >= self.attrs[attr_index].0 {
-                    changes.push(self.attrs[attr_index].1.clone());
-                    attr_index += 1;
-                }
                 if cells_in_line + cells > width || grapheme == "\n" {
                     if lines > 1 {
                         changes.push(Change::Text("\r\n".to_string()));
@@ -65,8 +60,12 @@ impl Document {
                     }
                 }
                 text_idx += grapheme.len();
-                // TODO - accumulate multiple cells into a string rather than a change per cell
+                // LATER - accumulate multiple cells into a string rather than a change per cell
                 if grapheme != "\n" {
+                    while attr_index < self.attrs.len() && text_idx >= self.attrs[attr_index].0 {
+                        changes.push(self.attrs[attr_index].1.clone());
+                        attr_index += 1;
+                    }
                     changes.push(Change::Text(grapheme.to_string()));
                     cells_in_line += cells;
                 }
@@ -93,14 +92,16 @@ fn main() -> Result<(), Error> {
     let mut stdin = stdin();
     let size = term.terminal().get_screen_size()?;
     let mut parser = Parser::new();
-    let mut buf = [0u8; 16946];
-    let read = stdin.read(&mut buf)?;
+    // TODO - move reading to Document::render
+    let mut buf = vec![];
+    let read = stdin.read_to_end(&mut buf)?;
     let mut text = String::new();
     let mut attrs = vec![(0, Change::AllAttributes(CellAttributes::default()))];
     parser.parse(&buf[0..read], |a| {
         match a {
             Print(c) => text.push(c),
             Control(LineFeed) => text.push('\n'),
+            // TODO - hyperlinks
             Action::CSI(CSI::Sgr(s)) => {
                 let change = match s {
                     Sgr::Reset => Change::AllAttributes(CellAttributes::default()),
