@@ -57,50 +57,50 @@ impl Document {
         Ok(Document { text, attrs })
     }
 
-    // Takes a start byte offset into text, a number of lines to render, and the width in character
-    // cells of those lines.
+    // Takes a start line, a number of lines to render, and the width in character cells of those
+    // lines.
     // Returns the changes necessary to render those lines assuming a terminal cursor at the
-    // start of the first line and the bytes consumed.
-    // Pass start + the consumed bytes to future render calls to continue from the last displayed
-    // character in the changes.
-    // Reads from the underlying stream if it hasn't been exhausted and more data is needed to fill
+    // start of the first line and the lines rendered.
+    // TODO - Reads from the underlying stream if it hasn't been exhausted and more data is needed to fill
     // the lines.
     // May return an error if reading produced an error.
-    // If the returned bytes are 0, EOF has been reached.
+    // If the returned lines are fewer than requested, EOF has been reached.
     fn render(
         &mut self,
-        start: usize,
-        mut lines: usize,
         width: usize,
+        start: usize,
+        lines: usize,
     ) -> Result<(Vec<Change>, usize), Error> {
         assert!(width > 0);
         assert!(lines > 0);
         let mut changes = vec![];
         use unicode_segmentation::UnicodeSegmentation;
-        let mut graphemes = self.text[start..]
+        let mut graphemes = self
+            .text
             .graphemes(true)
             .map(|g| (g, grapheme_column_width(g, None)));
-        let mut text_idx = start;
-        let mut attr_index = self.attrs.partition_point(|item| item.0 < start);
+        let mut text_idx = 0;
+        let mut attr_index = 0;
         let mut cells_in_line = 0;
-        loop {
+        let mut line = 0;
+        let end = start + lines;
+        while line < end {
             if let Some((grapheme, cells)) = graphemes.next() {
                 if cells_in_line + cells > width || grapheme == "\n" {
-                    if lines > 1 {
+                    line += 1;
+                    cells_in_line = 0;
+                    if line >= start && line < end {
                         changes.push(Change::Text("\r\n".to_string()));
-                        lines -= 1;
-                        cells_in_line = 0;
-                    } else {
-                        break;
                     }
                 }
-                // LATER - accumulate multiple cells into a string rather than a change per cell
                 if grapheme != "\n" {
                     while attr_index < self.attrs.len() && text_idx >= self.attrs[attr_index].0 {
                         changes.push(self.attrs[attr_index].1.clone());
                         attr_index += 1;
                     }
-                    changes.push(Change::Text(grapheme.to_string()));
+                    if line >= start {
+                        changes.push(Change::Text(grapheme.to_string()));
+                    }
                     cells_in_line += cells;
                 }
                 text_idx += grapheme.len();
@@ -109,10 +109,11 @@ impl Document {
                 // More correct thing will be if we're within a grapheme of the end to see if
                 // there are any zwjs that need to be added to what's in the buffer.
                 // Maybe call next twice so we're two out?
+                line += 1;
                 break;
             }
         }
-        Ok((changes, text_idx - start))
+        Ok((changes, line - start))
     }
 }
 
@@ -124,7 +125,7 @@ fn main() -> Result<(), Error> {
 
     let size = term.terminal().get_screen_size()?;
     let mut doc = Document::new(Box::new(stdin()))?;
-    let (changes, mut last_rendered) = doc.render(0, size.rows - 2, size.cols)?;
+    let (changes, mut last_rendered) = doc.render(size.cols, 0, size.rows - 2)?;
     term.add_changes(changes);
     term.flush()?;
 
@@ -142,7 +143,7 @@ fn main() -> Result<(), Error> {
                     ..
                 }) => {
                     let (changes, amount_rendered) =
-                        doc.render(last_rendered, size.rows - 2, size.cols)?;
+                        doc.render(size.cols, last_rendered, last_rendered + size.rows - 2)?;
                     last_rendered += amount_rendered;
                     term.add_changes(changes);
                     term.flush()?;
@@ -163,8 +164,10 @@ fn main() -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
-
-    use termwiz::{color::ColorAttribute, surface::Surface};
+    use termwiz::{
+        color::ColorAttribute,
+        surface::{Position::Absolute, Surface},
+    };
 
     use super::*;
 
@@ -172,7 +175,7 @@ mod tests {
     fn parse_color_output() -> Result<(), Error> {
         let input = "D\x1b[31mR\x1b[mD";
         let mut doc = Document::new(Box::new(input.as_bytes()))?;
-        let (changes, _) = doc.render(0, 1, 10)?;
+        let (changes, _) = doc.render(10, 0, 1)?;
         let mut screen = Surface::new(10, 1);
         screen.add_changes(changes);
         let cells = &screen.screen_cells()[0];
@@ -200,11 +203,47 @@ mod tests {
                     Change::Text("y".to_string()),
                     Change::Text("e".to_string()),
                 ],
-                6
+                2
             ),
-            d.render(0, 2, 3)?
+            d.render(3, 0, 2)?
         );
-        assert_eq!((vec![], 0), d.render(6, 2, 3)?);
+        assert_eq!(
+            (vec![Change::AllAttributes(CellAttributes::default()),], 0),
+            d.render(3, 2, 2)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn render_backwards() -> Result<(), Error> {
+        let input = "1\n2\n3\n";
+        let mut doc = Document::new(Box::new(input.as_bytes()))?;
+        let (changes, lines) = doc.render(1, 0, 1)?;
+        let mut screen = Surface::new(1, 1);
+        screen.add_changes(changes);
+        let cells = &screen.screen_cells()[0];
+        assert_eq!(1, lines);
+        assert_eq!("1", cells[0].str());
+        let (changes, _) = doc.render(1, 1, 1)?;
+        screen.add_changes(changes);
+        let cell = {
+            let cells = screen.screen_cells();
+            cells[0][0].str().to_string()
+        };
+        assert_eq!(
+            "2",
+            cell,
+            "Expected screen to just be '2' but got '{}'",
+            screen.screen_chars_to_string(),
+        );
+        let (changes, _) = doc.render(1, 0, 1)?;
+        screen.add_change(Change::CursorPosition {
+            x: Absolute(0),
+            y: Absolute(0),
+        });
+        screen.add_changes(changes);
+        let cells = &screen.screen_cells()[0];
+        assert_eq!("1", cells[0].str());
         Ok(())
     }
 }
