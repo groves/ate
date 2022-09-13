@@ -18,6 +18,12 @@ use termwiz::terminal::{new_terminal, Terminal};
 use termwiz::widgets::{RenderArgs, Ui, UpdateArgs, Widget, WidgetEvent};
 use termwiz::Error;
 
+struct DocState {
+    line: usize,
+    height: usize,
+    width: usize,
+}
+
 struct Document {
     text: String,
     attrs: Vec<(usize, Change)>,
@@ -167,17 +173,34 @@ impl Widget for Document {
     }
 }
 
+fn create_ui<'a>(
+    input: Box<dyn Read>,
+    width: usize,
+    height: usize,
+) -> Result<(Ui<'a>, Rc<RefCell<DocState>>), Error> {
+    let doc = Document::new(input)?;
+    let state = doc.state.clone();
+    let mut ui = Ui::new();
+    let root_id = ui.set_root(doc);
+    ui.set_focus(root_id);
+
+    // Send a resize event through to get us to do an initial layout
+    ui.queue_event(WidgetEvent::Input(InputEvent::Resized {
+        cols: width,
+        rows: height,
+    }));
+    ui.process_event_queue()?;
+    Ok((ui, state))
+}
+
 fn main() -> Result<(), Error> {
     let caps = Capabilities::new_from_env()?;
     let underlying_term = new_terminal(caps)?;
     let mut term = BufferedTerminal::new(underlying_term)?;
     term.terminal().set_raw_mode()?;
-    let mut ui = Ui::new();
-    let doc = Document::new(Box::new(stdin()))?;
+    let size = term.terminal().get_screen_size()?;
 
-    let root_id = ui.set_root(doc);
-
-    ui.set_focus(root_id);
+    let (mut ui, _) = create_ui(Box::new(stdin()), size.cols, size.rows)?;
 
     loop {
         ui.process_event_queue()?;
@@ -195,13 +218,14 @@ fn main() -> Result<(), Error> {
 
         // Wait for user input
         match term.terminal().poll_input(None) {
-            Ok(Some(InputEvent::Resized { rows, cols })) => {
-                // FIXME: this is working around a bug where we don't realize
-                // that we should redraw everything on resize in BufferedTerminal.
-                term.add_change(Change::ClearScreen(Default::default()));
-                term.resize(cols, rows);
-            }
             Ok(Some(input)) => match input {
+                InputEvent::Resized { rows, cols } => {
+                    // FIXME: this is working around a bug where we don't realize
+                    // that we should redraw everything on resize in BufferedTerminal.
+                    term.add_change(Change::ClearScreen(Default::default()));
+                    term.resize(cols, rows);
+                    ui.queue_event(WidgetEvent::Input(input));
+                }
                 InputEvent::Key(KeyEvent {
                     key: KeyCode::Escape,
                     ..
@@ -210,7 +234,7 @@ fn main() -> Result<(), Error> {
                     key: KeyCode::Char('q'),
                     ..
                 }) => {
-                    // Quit the app when escape or qis pressed
+                    // Quit the app when escape or q is pressed
                     break;
                 }
                 _ => {
@@ -229,12 +253,6 @@ fn main() -> Result<(), Error> {
     Ok(())
 }
 
-struct DocState {
-    line: usize,
-    height: usize,
-    width: usize,
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -249,19 +267,15 @@ mod tests {
         surface: Surface,
     }
 
-    fn create_ui(input: &str, width: usize, height: usize) -> Context {
-        let doc = Document::new(Box::new(Cursor::new(input.to_string()))).unwrap();
+    fn create_test_ui(input: &str, width: usize, height: usize) -> Context {
+        let (ui, state) =
+            create_ui(Box::new(Cursor::new(input.to_string())), width, height).unwrap();
         let mut ctx = Context {
-            ui: Ui::new(),
-            state: doc.state.clone(),
+            ui,
+            state,
             surface: Surface::new(width, height),
         };
-        ctx.ui.set_root(doc);
-        ctx.ui.queue_event(WidgetEvent::Input(InputEvent::Resized {
-            cols: width,
-            rows: height,
-        }));
-        ctx.ui.process_event_queue().unwrap();
+        // Render twice to make sure we're not stepping on ourselves
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         ctx
@@ -270,7 +284,7 @@ mod tests {
     #[test]
     fn parse_color_output() {
         let input = "D\x1b[31mR\x1b[mD";
-        let mut ctx = create_ui(input, 3, 1);
+        let mut ctx = create_test_ui(input, 3, 1);
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!(ColorAttribute::Default, cells[0].attrs().foreground());
         assert_eq!(
@@ -283,14 +297,14 @@ mod tests {
 
     #[test]
     fn render_short_doc() {
-        let ctx = create_ui("Hi Bye", 3, 2);
+        let ctx = create_test_ui("Hi Bye", 3, 2);
         assert_eq!(ctx.surface.screen_chars_to_string(), "Hi \nBye\n");
     }
 
     #[test]
     fn render_backwards() {
         let input = "1\n2\n3\n";
-        let mut ctx = create_ui(input, 1, 1);
+        let mut ctx = create_test_ui(input, 1, 1);
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("1", cells[0].str());
