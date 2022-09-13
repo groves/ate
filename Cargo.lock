@@ -62,6 +62,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cassowary"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df8670b8c7b9dae1793364eafadf7239c40d669904660c5960d74cfd80b46a53"
+
+[[package]]
 name = "cfg-if"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -704,9 +710,11 @@ dependencies = [
  "anyhow",
  "base64",
  "bitflags",
+ "cassowary",
  "cfg-if 1.0.0",
  "filedescriptor",
  "fixedbitset",
+ "fnv",
  "hex",
  "lazy_static",
  "libc",
