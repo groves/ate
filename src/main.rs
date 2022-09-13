@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::io::{stdin, Read};
+use std::process::Command;
 use std::rc::Rc;
 
 use termwiz::caps::Capabilities;
@@ -9,7 +10,8 @@ use termwiz::escape::csi::Sgr;
 use termwiz::escape::parser::Parser;
 use termwiz::escape::Action::{self, Control, Print};
 use termwiz::escape::ControlCode::LineFeed;
-use termwiz::escape::CSI;
+use termwiz::escape::{OperatingSystemCommand, CSI};
+use termwiz::hyperlink::Hyperlink;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
 use termwiz::surface::{Change, Position::Absolute};
 
@@ -18,30 +20,37 @@ use termwiz::terminal::{new_terminal, Terminal};
 use termwiz::widgets::{RenderArgs, Ui, UpdateArgs, Widget, WidgetEvent};
 use termwiz::Error;
 
+#[derive(Default)]
 struct DocState {
     line: usize,
     height: usize,
     width: usize,
+    link_idx: usize,
 }
 
-struct Document {
+struct Document<'a> {
     text: String,
     attrs: Vec<(usize, Change)>,
+    links: Vec<(usize, Option<Hyperlink>)>,
     state: Rc<RefCell<DocState>>,
+    open_link: Box<dyn FnMut(&str) + 'a>,
 }
 
-impl Document {
-    fn new(mut input: Box<dyn Read>) -> Result<Document, Error> {
+impl<'a> Document<'a> {
+    fn new<F>(mut input: Box<dyn Read>, open_link: F) -> Result<Document<'a>, Error>
+    where
+        F: FnMut(&str) + 'a,
+    {
         // TODO - lazily read and parse in Document::render
         let mut buf = vec![];
         let read = input.read_to_end(&mut buf)?;
         let mut text = String::new();
+        let mut links = vec![];
         let mut attrs = vec![(0, Change::AllAttributes(CellAttributes::default()))];
         Parser::new().parse(&buf[0..read], |a| {
             match a {
                 Print(c) => text.push(c),
                 Control(LineFeed) => text.push('\n'),
-                // TODO - hyperlinks
                 Action::CSI(CSI::Sgr(s)) => {
                     let change = match s {
                         Sgr::Reset => Change::AllAttributes(CellAttributes::default()),
@@ -63,22 +72,61 @@ impl Document {
                     };
                     attrs.push((text.len(), change));
                 }
+                Action::OperatingSystemCommand(osc) => {
+                    match *osc {
+                        OperatingSystemCommand::SetHyperlink(h) => {
+                            links.push((text.len(), h));
+                        }
+                        _ => {}
+                    };
+                }
                 _ => (),
             };
         });
         Ok(Document {
             text,
             attrs,
-            state: Rc::new(RefCell::new(DocState {
-                line: 0,
-                height: 0,
-                width: 0,
-            })),
+            links,
+            state: Rc::new(RefCell::new(Default::default())),
+            open_link: Box::new(open_link),
         })
+    }
+
+    fn process_key(&mut self, event: &KeyEvent) -> bool {
+        match event {
+            KeyEvent {
+                key: KeyCode::Char(' '),
+                ..
+            } => {
+                let mut state = self.state.borrow_mut();
+                state.line += state.height - 2;
+                true
+            }
+            KeyEvent {
+                key: KeyCode::Char('b'),
+                ..
+            } => {
+                let mut state = self.state.borrow_mut();
+                state.line -= state.height - 2;
+                true
+            }
+            KeyEvent {
+                key: KeyCode::Char('n'),
+                ..
+            } => {
+                let mut state = self.state.borrow_mut();
+                let x = &self.links[state.link_idx];
+                state.link_idx += 2;
+                let uri = x.1.as_ref().unwrap().uri();
+                (self.open_link)(uri);
+                true
+            }
+            KeyEvent { .. } => false,
+        }
     }
 }
 
-impl Widget for Document {
+impl<'a> Widget for Document<'a> {
     // Takes a start line, a number of lines to render, and the width in character cells of those
     // lines.
     // Returns the changes necessary to render those lines assuming a terminal cursor at the
@@ -146,30 +194,12 @@ impl Widget for Document {
     }
 
     fn process_event(&mut self, event: &WidgetEvent, _args: &mut UpdateArgs) -> bool {
-        return match event {
+        match event {
             WidgetEvent::Input(i) => match i {
-                InputEvent::Key(k) => match k {
-                    KeyEvent {
-                        key: KeyCode::Char(' '),
-                        ..
-                    } => {
-                        let mut state = self.state.borrow_mut();
-                        state.line += state.height - 2;
-                        true
-                    }
-                    KeyEvent {
-                        key: KeyCode::Char('b'),
-                        ..
-                    } => {
-                        let mut state = self.state.borrow_mut();
-                        state.line -= state.height - 2;
-                        true
-                    }
-                    KeyEvent { .. } => false,
-                },
+                InputEvent::Key(k) => self.process_key(k),
                 _ => false,
             },
-        };
+        }
     }
 }
 
@@ -178,7 +208,10 @@ fn create_ui<'a>(
     width: usize,
     height: usize,
 ) -> Result<(Ui<'a>, Rc<RefCell<DocState>>), Error> {
-    let doc = Document::new(input)?;
+    let doc = Document::new(input, |uri| {
+        let output = Command::new(",edit").arg(uri).output().unwrap();
+        println!("{}", String::from_utf8(output.stdout).unwrap());
+    })?;
     let state = doc.state.clone();
     let mut ui = Ui::new();
     let root_id = ui.set_root(doc);
@@ -198,6 +231,7 @@ fn main() -> Result<(), Error> {
     let underlying_term = new_terminal(caps)?;
     let mut term = BufferedTerminal::new(underlying_term)?;
     term.terminal().set_raw_mode()?;
+    term.terminal().enter_alternate_screen()?;
     let size = term.terminal().get_screen_size()?;
 
     let (mut ui, _) = create_ui(Box::new(stdin()), size.cols, size.rows)?;
@@ -268,17 +302,13 @@ mod tests {
     }
 
     fn create_test_ui(input: &str, width: usize, height: usize) -> Context {
-        let (ui, state) =
+        let (mut ui, state) =
             create_ui(Box::new(Cursor::new(input.to_string())), width, height).unwrap();
-        let mut ctx = Context {
-            ui,
-            state,
-            surface: Surface::new(width, height),
-        };
-        // Render twice to make sure we're not stepping on ourselves
-        ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
-        ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
-        ctx
+        let mut surface = Surface::new(width, height);
+        // Render twice to test if we're stepping on ourselves
+        ui.render_to_screen(&mut surface).unwrap();
+        ui.render_to_screen(&mut surface).unwrap();
+        Context { ui, state, surface }
     }
 
     #[test]
