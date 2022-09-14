@@ -1,7 +1,5 @@
-use std::cell::RefCell;
 use std::io::{stdin, Read};
 use std::process::Command;
-use std::rc::Rc;
 
 use termwiz::caps::Capabilities;
 use termwiz::cell::{grapheme_column_width, AttributeChange, CellAttributes};
@@ -20,14 +18,6 @@ use termwiz::terminal::{new_terminal, Terminal};
 use termwiz::widgets::{RenderArgs, Ui, UpdateArgs, Widget, WidgetEvent};
 use termwiz::Error;
 
-#[derive(Default)]
-struct DocState {
-    line: usize,
-    height: usize,
-    width: usize,
-    link_idx: usize,
-}
-
 struct LinkRange {
     start: usize,
     end: usize,
@@ -38,15 +28,11 @@ struct Document<'a> {
     text: String,
     attrs: Vec<(usize, Change)>,
     links: Vec<LinkRange>,
-    state: Rc<RefCell<DocState>>,
-    open_link: Box<dyn FnMut(&str) + 'a>,
+    input: Box<dyn Read + 'a>,
 }
 
 impl<'a> Document<'a> {
-    fn new(
-        mut input: Box<dyn Read + 'a>,
-        open_link: Box<dyn FnMut(&str) + 'a>,
-    ) -> Result<Document<'a>, Error> {
+    fn new(mut input: Box<dyn Read + 'a>) -> Result<Document<'a>, Error> {
         // TODO - lazily read and parse in Document::render
         let mut buf = vec![];
         let read = input.read_to_end(&mut buf)?;
@@ -82,7 +68,7 @@ impl<'a> Document<'a> {
                 }
                 Action::OperatingSystemCommand(osc) => {
                     match *osc {
-                        OperatingSystemCommand::SetHyperlink(parsed_link_set) => {
+                        OperatingSystemCommand::SetHyperlink(parsed_link) => {
                             // SetHyperlink may have the current partial link in it.
                             // We may have just ended the link that's in there, too.
                             // We don't try to collapse repeated links into a single range.
@@ -91,10 +77,7 @@ impl<'a> Document<'a> {
                             if let Some((start, link)) = partial_link.take() {
                                 complete_link(start, link, text.len());
                             }
-                            partial_link = match parsed_link_set {
-                                Some(parsed_link) => Some((text.len(), parsed_link)),
-                                None => None,
-                            };
+                            partial_link = parsed_link.map(|l| (text.len(), l));
                         }
                         _ => {}
                     };
@@ -109,57 +92,71 @@ impl<'a> Document<'a> {
             text,
             attrs,
             links,
-            state: Default::default(),
-            open_link,
+            input,
         })
     }
+}
 
+struct DocumentWidget<'a> {
+    doc: Document<'a>,
+    line: usize,
+    height: usize,
+    width: usize,
+    link_idx: usize,
+    open_link: Box<dyn FnMut(&str) + 'a>,
+}
+
+impl<'a> DocumentWidget<'a> {
     fn process_key(&mut self, event: &KeyEvent) -> bool {
         match event {
             KeyEvent {
                 key: KeyCode::Char(' '),
                 ..
             } => {
-                let mut state = self.state.borrow_mut();
-                state.line += state.height - 2;
+                self.line += self.height - 2;
                 true
             }
             KeyEvent {
                 key: KeyCode::Char('b'),
                 ..
             } => {
-                let mut state = self.state.borrow_mut();
-                state.line -= state.height - 2;
+                self.line -= self.height - 2;
                 true
             }
             KeyEvent {
                 key: KeyCode::Char('n'),
                 ..
             } => {
-                let mut state = self.state.borrow_mut();
-                let x = &self.links[state.link_idx];
-                state.link_idx += 1;
+                let x = &self.doc.links[self.link_idx];
+                self.link_idx += 1;
                 (self.open_link)(x.link.uri());
                 true
             }
             KeyEvent { .. } => false,
         }
     }
+
+    fn new(doc: Document<'a>, open_link: Box<dyn FnMut(&str) + 'a>) -> DocumentWidget<'a> {
+        DocumentWidget {
+            doc,
+            open_link,
+            line: 0,
+            height: 0,
+            width: 0,
+            link_idx: 0,
+        }
+    }
 }
 
-impl<'a> Widget for Document<'a> {
+impl<'a> Widget for DocumentWidget<'a> {
     // TODO - Reads from the underlying stream if it hasn't been exhausted and more data is needed to fill
     // the lines.
     fn render(&mut self, args: &mut RenderArgs) {
         let (width, height) = args.surface.dimensions();
         assert!(width > 0);
         assert!(height > 0);
-        let state_line = {
-            let mut state = self.state.borrow_mut();
-            state.height = height;
-            state.width = width;
-            state.line
-        };
+        self.height = height;
+        self.width = width;
         let mut changes = vec![
             Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
@@ -169,29 +166,32 @@ impl<'a> Widget for Document<'a> {
         ];
         use unicode_segmentation::UnicodeSegmentation;
         let mut graphemes = self
+            .doc
             .text
             .graphemes(true)
             .map(|g| (g, grapheme_column_width(g, None)));
         let mut text_idx = 0;
         let mut attr_index = 0;
         let mut cells_in_line = 0;
-        let end = state_line + height;
+        let end = self.line + height;
         let mut line = 0;
         while line < end {
             if let Some((grapheme, cells)) = graphemes.next() {
                 if cells_in_line + cells > width || grapheme == "\n" {
                     line += 1;
                     cells_in_line = 0;
-                    if line >= state_line && line < end {
+                    if line >= self.line && line < end {
                         changes.push(Change::Text("\r\n".to_string()));
                     }
                 }
                 if grapheme != "\n" {
-                    while attr_index < self.attrs.len() && text_idx >= self.attrs[attr_index].0 {
-                        changes.push(self.attrs[attr_index].1.clone());
+                    while attr_index < self.doc.attrs.len()
+                        && text_idx >= self.doc.attrs[attr_index].0
+                    {
+                        changes.push(self.doc.attrs[attr_index].1.clone());
                         attr_index += 1;
                     }
-                    if line >= state_line {
+                    if line >= self.line {
                         changes.push(Change::Text(grapheme.to_string()));
                     }
                     cells_in_line += cells;
@@ -223,11 +223,11 @@ fn create_ui<'a>(
     width: usize,
     height: usize,
     open_link: Box<dyn FnMut(&str) + 'a>,
-) -> Result<(Ui<'a>, Rc<RefCell<DocState>>), Error> {
-    let doc = Document::new(input, open_link)?;
-    let state = doc.state.clone();
+) -> Result<Ui<'a>, Error> {
+    let doc = Document::new(input)?;
+    let widget = DocumentWidget::new(doc, open_link);
     let mut ui = Ui::new();
-    let root_id = ui.set_root(doc);
+    let root_id = ui.set_root(widget);
     ui.set_focus(root_id);
 
     // Send a resize event through to get us to do an initial layout
@@ -236,7 +236,7 @@ fn create_ui<'a>(
         rows: height,
     }));
     ui.process_event_queue()?;
-    Ok((ui, state))
+    Ok(ui)
 }
 
 fn main() -> Result<(), Error> {
@@ -247,7 +247,7 @@ fn main() -> Result<(), Error> {
     term.terminal().enter_alternate_screen()?;
     let size = term.terminal().get_screen_size()?;
 
-    let (mut ui, _) = create_ui(
+    let mut ui = create_ui(
         Box::new(stdin()),
         size.cols,
         size.rows,
@@ -312,18 +312,17 @@ fn main() -> Result<(), Error> {
 mod tests {
     use std::io::Cursor;
 
-    use termwiz::{color::ColorAttribute, surface::Surface};
+    use termwiz::{color::ColorAttribute, input::Modifiers, surface::Surface};
 
     use super::*;
 
     struct Context<'a> {
         ui: Ui<'a>,
-        state: Rc<RefCell<DocState>>,
         surface: Surface,
     }
 
     fn create_test_ui(input: &str, width: usize, height: usize) -> Context {
-        let (mut ui, state) = create_ui(
+        let mut ui = create_ui(
             Box::new(Cursor::new(input.to_string())),
             width,
             height,
@@ -334,7 +333,7 @@ mod tests {
         // Render twice to test if we're stepping on ourselves
         ui.render_to_screen(&mut surface).unwrap();
         ui.render_to_screen(&mut surface).unwrap();
-        Context { ui, state, surface }
+        Context { ui, surface }
     }
 
     #[test]
@@ -351,11 +350,7 @@ mod tests {
         assert_eq!(ctx.surface.screen_chars_to_string(), "DRD\n");
     }
     fn parse_links(input: &str) -> Vec<LinkRange> {
-        let doc = Document::new(
-            Box::new(Cursor::new(input.to_string())),
-            Box::new(|_uri| {}),
-        )
-        .unwrap();
+        let doc = Document::new(Box::new(Cursor::new(input.to_string()))).unwrap();
         doc.links
     }
 
@@ -394,12 +389,17 @@ mod tests {
 
     #[test]
     fn render_backwards() {
-        let input = "1\n2\n3\n";
-        let mut ctx = create_test_ui(input, 1, 1);
+        let input = "1\n2\n3\n4\n5\n6\n";
+        let mut ctx = create_test_ui(input, 1, 3);
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("1", cells[0].str());
-        ctx.state.borrow_mut().line = 1;
+        ctx.ui
+            .queue_event(WidgetEvent::Input(InputEvent::Key(KeyEvent {
+                key: KeyCode::Char(' '),
+                modifiers: Modifiers::NONE,
+            })));
+        ctx.ui.process_event_queue().unwrap();
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         let cell = {
             let cells = ctx.surface.screen_cells();
@@ -411,7 +411,12 @@ mod tests {
             "Expected screen to just be '2' but got '{}'",
             ctx.surface.screen_chars_to_string(),
         );
-        ctx.state.borrow_mut().line = 0;
+        ctx.ui
+            .queue_event(WidgetEvent::Input(InputEvent::Key(KeyEvent {
+                key: KeyCode::Char('b'),
+                modifiers: Modifiers::NONE,
+            })));
+        ctx.ui.process_event_queue().unwrap();
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("1", cells[0].str());
