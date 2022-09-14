@@ -28,25 +28,33 @@ struct DocState {
     link_idx: usize,
 }
 
+struct LinkRange {
+    start: usize,
+    end: usize,
+    link: Hyperlink,
+}
+
 struct Document<'a> {
     text: String,
     attrs: Vec<(usize, Change)>,
-    links: Vec<(usize, Option<Hyperlink>)>,
+    links: Vec<LinkRange>,
     state: Rc<RefCell<DocState>>,
     open_link: Box<dyn FnMut(&str) + 'a>,
 }
 
 impl<'a> Document<'a> {
-    fn new<F>(mut input: Box<dyn Read>, open_link: F) -> Result<Document<'a>, Error>
-    where
-        F: FnMut(&str) + 'a,
-    {
+    fn new(
+        mut input: Box<dyn Read + 'a>,
+        open_link: Box<dyn FnMut(&str) + 'a>,
+    ) -> Result<Document<'a>, Error> {
         // TODO - lazily read and parse in Document::render
         let mut buf = vec![];
         let read = input.read_to_end(&mut buf)?;
         let mut text = String::new();
         let mut links = vec![];
         let mut attrs = vec![(0, Change::AllAttributes(CellAttributes::default()))];
+        let mut partial_link: Option<(usize, Hyperlink)> = None;
+        let mut complete_link = |start, link, end| links.push(LinkRange { start, link, end });
         Parser::new().parse(&buf[0..read], |a| {
             match a {
                 Print(c) => text.push(c),
@@ -74,8 +82,19 @@ impl<'a> Document<'a> {
                 }
                 Action::OperatingSystemCommand(osc) => {
                     match *osc {
-                        OperatingSystemCommand::SetHyperlink(h) => {
-                            links.push((text.len(), h));
+                        OperatingSystemCommand::SetHyperlink(parsed_link_set) => {
+                            // SetHyperlink may have the current partial link in it.
+                            // We may have just ended the link that's in there, too.
+                            // We don't try to collapse repeated links into a single range.
+                            // Instead we assume the output repeated links for some reason and
+                            // faithfully recreate it.
+                            if let Some((start, link)) = partial_link.take() {
+                                complete_link(start, link, text.len());
+                            }
+                            partial_link = match parsed_link_set {
+                                Some(parsed_link) => Some((text.len(), parsed_link)),
+                                None => None,
+                            };
                         }
                         _ => {}
                     };
@@ -83,12 +102,15 @@ impl<'a> Document<'a> {
                 _ => (),
             };
         });
+        if let Some((start, link)) = partial_link {
+            complete_link(start, link, text.len());
+        }
         Ok(Document {
             text,
             attrs,
             links,
-            state: Rc::new(RefCell::new(Default::default())),
-            open_link: Box::new(open_link),
+            state: Default::default(),
+            open_link,
         })
     }
 
@@ -116,9 +138,8 @@ impl<'a> Document<'a> {
             } => {
                 let mut state = self.state.borrow_mut();
                 let x = &self.links[state.link_idx];
-                state.link_idx += 2;
-                let uri = x.1.as_ref().unwrap().uri();
-                (self.open_link)(uri);
+                state.link_idx += 1;
+                (self.open_link)(x.link.uri());
                 true
             }
             KeyEvent { .. } => false,
@@ -127,14 +148,8 @@ impl<'a> Document<'a> {
 }
 
 impl<'a> Widget for Document<'a> {
-    // Takes a start line, a number of lines to render, and the width in character cells of those
-    // lines.
-    // Returns the changes necessary to render those lines assuming a terminal cursor at the
-    // start of the first line and the lines rendered.
     // TODO - Reads from the underlying stream if it hasn't been exhausted and more data is needed to fill
     // the lines.
-    // May return an error if reading produced an error.
-    // If the returned lines are fewer than requested, EOF has been reached.
     fn render(&mut self, args: &mut RenderArgs) {
         let (width, height) = args.surface.dimensions();
         assert!(width > 0);
@@ -204,14 +219,12 @@ impl<'a> Widget for Document<'a> {
 }
 
 fn create_ui<'a>(
-    input: Box<dyn Read>,
+    input: Box<dyn Read + 'a>,
     width: usize,
     height: usize,
+    open_link: Box<dyn FnMut(&str) + 'a>,
 ) -> Result<(Ui<'a>, Rc<RefCell<DocState>>), Error> {
-    let doc = Document::new(input, |uri| {
-        let output = Command::new(",edit").arg(uri).output().unwrap();
-        println!("{}", String::from_utf8(output.stdout).unwrap());
-    })?;
+    let doc = Document::new(input, open_link)?;
     let state = doc.state.clone();
     let mut ui = Ui::new();
     let root_id = ui.set_root(doc);
@@ -234,7 +247,15 @@ fn main() -> Result<(), Error> {
     term.terminal().enter_alternate_screen()?;
     let size = term.terminal().get_screen_size()?;
 
-    let (mut ui, _) = create_ui(Box::new(stdin()), size.cols, size.rows)?;
+    let (mut ui, _) = create_ui(
+        Box::new(stdin()),
+        size.cols,
+        size.rows,
+        Box::new(|uri| {
+            let output = Command::new(",edit").arg(uri).output().unwrap();
+            println!("{}", String::from_utf8(output.stdout).unwrap());
+        }),
+    )?;
 
     loop {
         ui.process_event_queue()?;
@@ -302,8 +323,13 @@ mod tests {
     }
 
     fn create_test_ui(input: &str, width: usize, height: usize) -> Context {
-        let (mut ui, state) =
-            create_ui(Box::new(Cursor::new(input.to_string())), width, height).unwrap();
+        let (mut ui, state) = create_ui(
+            Box::new(Cursor::new(input.to_string())),
+            width,
+            height,
+            Box::new(|_uri| {}),
+        )
+        .unwrap();
         let mut surface = Surface::new(width, height);
         // Render twice to test if we're stepping on ourselves
         ui.render_to_screen(&mut surface).unwrap();
@@ -323,6 +349,41 @@ mod tests {
         );
         assert_eq!(ColorAttribute::Default, cells[2].attrs().foreground());
         assert_eq!(ctx.surface.screen_chars_to_string(), "DRD\n");
+    }
+    fn parse_links(input: &str) -> Vec<LinkRange> {
+        let doc = Document::new(
+            Box::new(Cursor::new(input.to_string())),
+            Box::new(|_uri| {}),
+        )
+        .unwrap();
+        doc.links
+    }
+
+    #[test]
+    fn parse_zero_length_link() {
+        let links = parse_links("\x1b]8;;http://a.b\x1b\\\x1b]8;;\x1b\\After zero length link");
+        assert_eq!(1, links.len());
+        assert_eq!(0, links[0].start);
+        assert_eq!(0, links[0].end);
+    }
+    #[test]
+    fn parse_continued_link() {
+        let links = parse_links("Before\x1b]8;;http://a.b\x1b\\\x1b]8;;http://a.b\x1b\\After");
+        assert_eq!(2, links.len());
+        assert_eq!(6, links[0].start);
+        assert_eq!(6, links[0].end);
+        assert_eq!(6, links[1].start);
+        assert_eq!(11, links[1].end);
+    }
+
+    #[test]
+    fn parse_a_link() {
+        let input = "Before\x1b]8;;http://example.com\x1b\\Link to example";
+        let links = parse_links(input);
+        assert_eq!(1, links.len());
+        assert_eq!(6, links[0].start);
+        assert_eq!(21, links[0].end);
+        assert_eq!(links[0].link.uri(), "http://example.com");
     }
 
     #[test]
