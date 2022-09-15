@@ -229,25 +229,45 @@ impl<'a> DocumentWidget<'a> {
             .height
     }
 
+    fn backward(&mut self, lines: usize) {
+        self.first_displayed_line = self.first_displayed_line.saturating_sub(lines);
+    }
+
+    fn forward(&mut self, lines: usize) {
+        self.first_displayed_line = min(
+            self.lines.len().saturating_sub(self.height()),
+            self.first_displayed_line + max(1, lines),
+        );
+    }
+
     fn process_key(&mut self, event: &KeyEvent) -> bool {
         match event {
+            KeyEvent {
+                key: KeyCode::UpArrow,
+                ..
+            } => {
+                self.backward(1);
+                true
+            }
+            KeyEvent {
+                key: KeyCode::DownArrow,
+                ..
+            } => {
+                self.forward(1);
+                true
+            }
             KeyEvent {
                 key: KeyCode::Char(' '),
                 ..
             } => {
-                self.first_displayed_line = min(
-                    self.lines.len().saturating_sub(self.height()),
-                    self.first_displayed_line + max(1, self.height() - 2),
-                );
+                self.forward(self.height() - 2);
                 true
             }
             KeyEvent {
                 key: KeyCode::Char('b'),
                 ..
             } => {
-                self.first_displayed_line = self
-                    .first_displayed_line
-                    .saturating_sub(max(1, self.height() - 2));
+                self.backward(self.height() - 2);
                 true
             }
             KeyEvent {
