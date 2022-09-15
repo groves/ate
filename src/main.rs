@@ -1,8 +1,9 @@
+use std::cmp::{max, min};
 use std::io::{stdin, Read};
 use std::process::Command;
 
 use termwiz::caps::Capabilities;
-use termwiz::cell::{grapheme_column_width, AttributeChange, CellAttributes, Intensity};
+use termwiz::cell::{grapheme_column_width, AttributeChange, CellAttributes};
 use termwiz::color::ColorAttribute;
 use termwiz::escape::csi::Sgr;
 use termwiz::escape::parser::Parser;
@@ -24,15 +25,14 @@ struct LinkRange {
     link: Hyperlink,
 }
 
-struct Document<'a> {
+struct Document {
     text: String,
     attrs: Vec<(usize, Change)>,
     links: Vec<LinkRange>,
-    input: Box<dyn Read + 'a>,
 }
 
-impl<'a> Document<'a> {
-    fn new(mut input: Box<dyn Read + 'a>) -> Result<Document<'a>, Error> {
+impl Document {
+    fn new<'a>(mut input: Box<dyn Read + 'a>) -> Result<Document, Error> {
         // TODO - lazily read and parse in Document::render
         let mut buf = vec![];
         let read = input.read_to_end(&mut buf)?;
@@ -88,12 +88,7 @@ impl<'a> Document<'a> {
         if let Some((start, link)) = partial_link {
             complete_link(start, link, text.len());
         }
-        Ok(Document {
-            text,
-            attrs,
-            links,
-            input,
-        })
+        Ok(Document { text, attrs, links })
     }
 }
 
@@ -113,7 +108,7 @@ struct Dimensions {
 }
 
 struct DocumentWidget<'a> {
-    doc: Document<'a>,
+    doc: Document,
     open_link: Box<dyn FnMut(&str) + 'a>,
     // Used for paging forward and backwards.
     // In reflow, the start_byte of this line is kept in the first_displayed_line of the reflowed
@@ -127,7 +122,7 @@ struct DocumentWidget<'a> {
 }
 
 impl<'a> DocumentWidget<'a> {
-    fn new(doc: Document<'a>, open_link: Box<dyn FnMut(&str) + 'a>) -> DocumentWidget<'a> {
+    fn new(doc: Document, open_link: Box<dyn FnMut(&str) + 'a>) -> DocumentWidget<'a> {
         DocumentWidget {
             doc,
             open_link,
@@ -240,25 +235,38 @@ impl<'a> DocumentWidget<'a> {
                 key: KeyCode::Char(' '),
                 ..
             } => {
-                // TODO saturating sub?
-                self.first_displayed_line += self.height() - 2;
+                self.first_displayed_line = min(
+                    self.lines.len().saturating_sub(self.height()),
+                    self.first_displayed_line + max(1, self.height() - 2),
+                );
                 true
             }
             KeyEvent {
                 key: KeyCode::Char('b'),
                 ..
             } => {
-                self.first_displayed_line -= self.height() - 2;
+                self.first_displayed_line = self
+                    .first_displayed_line
+                    .saturating_sub(max(1, self.height() - 2));
                 true
             }
             KeyEvent {
                 key: KeyCode::Char('n'),
                 ..
             } => {
+                if self.doc.links.len() == 0 {
+                    return true;
+                }
                 let link_idx = self.link_idx.unwrap_or(0);
                 let x = &self.doc.links[link_idx];
                 self.link_idx = Some(link_idx + 1);
                 (self.open_link)(x.link.uri());
+                for (idx, line) in self.lines.iter().enumerate() {
+                    if line.start_byte > x.start {
+                        self.first_displayed_line = idx.saturating_sub(1);
+                        break;
+                    }
+                }
                 true
             }
             KeyEvent { .. } => false,
@@ -284,11 +292,12 @@ impl<'a> Widget for DocumentWidget<'a> {
                 y: Absolute(0),
             },
         ];
-        for line in &self.lines[self.first_displayed_line..self.first_displayed_line + height - 1] {
+        let last_displayed_line = min(self.lines.len(), self.first_displayed_line + height) - 1;
+        for line in &self.lines[self.first_displayed_line..last_displayed_line] {
             changes.extend_from_slice(&line.changes);
             changes.push(Change::Text("\r\n".to_string()));
         }
-        changes.extend_from_slice(&self.lines[self.first_displayed_line + height - 1].changes);
+        changes.extend_from_slice(&self.lines[last_displayed_line].changes);
         args.surface.add_changes(changes);
     }
 
@@ -421,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_color_output() {
+    fn render_color() {
         let input = "D\x1b[31mR\x1b[mD";
         let mut ctx = create_test_ui(input, 3, 1);
         let cells = &ctx.surface.screen_cells()[0];
@@ -433,6 +442,57 @@ mod tests {
         assert_eq!(ColorAttribute::Default, cells[2].attrs().foreground());
         assert_eq!(ctx.surface.screen_chars_to_string(), "DRD\n");
     }
+
+    #[test]
+    fn render_short_doc() {
+        let ctx = create_test_ui("Hi Bye", 3, 2);
+        assert_eq!(ctx.surface.screen_chars_to_string(), "Hi \nBye\n");
+    }
+
+    fn press_char_event(c: char) -> WidgetEvent {
+        WidgetEvent::Input(InputEvent::Key(KeyEvent {
+            key: KeyCode::Char(c),
+            modifiers: Modifiers::NONE,
+        }))
+    }
+
+    #[test]
+    fn page() {
+        let input = "1\n2\n3\n4\n5\n6\n";
+        let mut ctx = create_test_ui(input, 1, 5);
+        ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
+        let cells = &ctx.surface.screen_cells()[0];
+        assert_eq!("1", cells[0].str());
+
+        ctx.ui.queue_event(press_char_event(' '));
+        // Going forward while at the last screen shouldn't keep the whole screen
+        ctx.ui.queue_event(press_char_event(' '));
+        ctx.ui.process_event_queue().unwrap();
+        ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
+        let cells = &ctx.surface.screen_cells()[0];
+        assert_eq!("2", cells[0].str());
+
+        ctx.ui.queue_event(press_char_event('b'));
+        // Going back while at the first line should stay at the first line
+        ctx.ui.queue_event(press_char_event('b'));
+        ctx.ui.process_event_queue().unwrap();
+        ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
+        let cells = &ctx.surface.screen_cells()[0];
+        assert_eq!("1", cells[0].str());
+    }
+    #[test]
+    fn visit_link() {
+        let input = "Before\n\x1b]8;;http://a.b\x1b\\Linked\x1b]8;;\x1b\\\nNot Linked";
+        let mut ctx = create_test_ui(input, 10, 3);
+        let cells = &ctx.surface.screen_cells()[0];
+        assert_eq!("B", cells[0].str());
+        ctx.ui.queue_event(press_char_event('n'));
+        ctx.ui.process_event_queue().unwrap();
+        ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
+        let cells = &ctx.surface.screen_cells()[0];
+        assert_eq!("L", cells[0].str());
+    }
+
     fn parse_links(input: &str) -> Vec<LinkRange> {
         let doc = Document::new(Box::new(Cursor::new(input.to_string()))).unwrap();
         doc.links
@@ -445,6 +505,7 @@ mod tests {
         assert_eq!(0, links[0].start);
         assert_eq!(0, links[0].end);
     }
+
     #[test]
     fn parse_continued_link() {
         let links = parse_links("Before\x1b]8;;http://a.b\x1b\\\x1b]8;;http://a.b\x1b\\After");
@@ -463,46 +524,5 @@ mod tests {
         assert_eq!(6, links[0].start);
         assert_eq!(21, links[0].end);
         assert_eq!(links[0].link.uri(), "http://example.com");
-    }
-
-    #[test]
-    fn render_short_doc() {
-        let ctx = create_test_ui("Hi Bye", 3, 2);
-        assert_eq!(ctx.surface.screen_chars_to_string(), "Hi \nBye\n");
-    }
-
-    #[test]
-    fn render_backwards() {
-        let input = "1\n2\n3\n4\n5\n6\n";
-        let mut ctx = create_test_ui(input, 1, 3);
-        ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
-        let cells = &ctx.surface.screen_cells()[0];
-        assert_eq!("1", cells[0].str());
-        ctx.ui
-            .queue_event(WidgetEvent::Input(InputEvent::Key(KeyEvent {
-                key: KeyCode::Char(' '),
-                modifiers: Modifiers::NONE,
-            })));
-        ctx.ui.process_event_queue().unwrap();
-        ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
-        let cell = {
-            let cells = ctx.surface.screen_cells();
-            cells[0][0].str().to_string()
-        };
-        assert_eq!(
-            "2",
-            cell,
-            "Expected screen to just be '2' but got '{}'",
-            ctx.surface.screen_chars_to_string(),
-        );
-        ctx.ui
-            .queue_event(WidgetEvent::Input(InputEvent::Key(KeyEvent {
-                key: KeyCode::Char('b'),
-                modifiers: Modifiers::NONE,
-            })));
-        ctx.ui.process_event_queue().unwrap();
-        ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
-        let cells = &ctx.surface.screen_cells()[0];
-        assert_eq!("1", cells[0].str());
     }
 }
