@@ -2,7 +2,7 @@ use std::io::{stdin, Read};
 use std::process::Command;
 
 use termwiz::caps::Capabilities;
-use termwiz::cell::{grapheme_column_width, AttributeChange, CellAttributes};
+use termwiz::cell::{grapheme_column_width, AttributeChange, CellAttributes, Intensity};
 use termwiz::color::ColorAttribute;
 use termwiz::escape::csi::Sgr;
 use termwiz::escape::parser::Parser;
@@ -97,53 +97,171 @@ impl<'a> Document<'a> {
     }
 }
 
+// Only valid for a particular text width due to reflowing
+struct Line {
+    start_byte: usize,
+    // The changes to render this line assuming the cursor is at the start of it.
+    // Starts with the full set of active attributes to let it be used
+    // without the Surface containing the active render state
+    changes: Vec<Change>,
+}
+
+#[derive(Clone, Copy)]
+struct Dimensions {
+    width: usize,
+    height: usize,
+}
+
 struct DocumentWidget<'a> {
     doc: Document<'a>,
-    line: usize,
-    height: usize,
-    width: usize,
-    link_idx: usize,
     open_link: Box<dyn FnMut(&str) + 'a>,
+    // Used for paging forward and backwards.
+    // In reflow, the start_byte of this line is kept in the first_displayed_line of the reflowed
+    // lines
+    first_displayed_line: usize,
+    last_render_size: Option<Dimensions>,
+    // The last link we opened
+    link_idx: Option<usize>,
+    // Cache of doc.text flown at the last_render_size. Will be cleared if the size changes.
+    lines: Vec<Line>,
 }
 
 impl<'a> DocumentWidget<'a> {
+    fn new(doc: Document<'a>, open_link: Box<dyn FnMut(&str) + 'a>) -> DocumentWidget<'a> {
+        DocumentWidget {
+            doc,
+            open_link,
+            first_displayed_line: 0,
+            last_render_size: None,
+            link_idx: None,
+            lines: vec![],
+        }
+    }
+
+    fn flow(&mut self) {
+        let width = self.width();
+        use unicode_segmentation::UnicodeSegmentation;
+        let graphemes = self
+            .doc
+            .text
+            .graphemes(true)
+            .map(|g| (g, grapheme_column_width(g, None)));
+
+        self.lines.clear();
+        let mut start_byte = 0;
+        let mut changes = vec![Change::AllAttributes(CellAttributes::default())];
+
+        let mut attr_idx = 0;
+        let mut cells_in_line = 0;
+        let mut byte = 0;
+        let mut attributes = CellAttributes::default();
+        for (grapheme, cells) in graphemes {
+            if cells_in_line + cells > width || grapheme == "\n" {
+                self.lines.push(Line {
+                    start_byte,
+                    changes,
+                });
+                changes = vec![Change::AllAttributes(attributes.clone())];
+                start_byte = byte;
+                cells_in_line = 0;
+            }
+            if grapheme != "\n" {
+                while attr_idx < self.doc.attrs.len() && byte >= self.doc.attrs[attr_idx].0 {
+                    use termwiz::cell::AttributeChange::*;
+                    match &self.doc.attrs[attr_idx].1 {
+                        Change::Attribute(a) => match a {
+                            Intensity(value) => {
+                                attributes.set_intensity(*value);
+                            }
+                            Underline(value) => {
+                                attributes.set_underline(*value);
+                            }
+                            Italic(value) => {
+                                attributes.set_italic(*value);
+                            }
+                            Blink(value) => {
+                                attributes.set_blink(*value);
+                            }
+                            Reverse(value) => {
+                                attributes.set_reverse(*value);
+                            }
+                            StrikeThrough(value) => {
+                                attributes.set_strikethrough(*value);
+                            }
+                            Invisible(value) => {
+                                attributes.set_invisible(*value);
+                            }
+                            Foreground(value) => {
+                                attributes.set_foreground(*value);
+                            }
+                            Background(value) => {
+                                attributes.set_background(*value);
+                            }
+                            Hyperlink(value) => {
+                                attributes.set_hyperlink(value.clone());
+                            }
+                        },
+                        Change::AllAttributes(_) => {
+                            attributes = CellAttributes::default();
+                        }
+                        _ => unreachable!(),
+                    }
+                    changes.push(self.doc.attrs[attr_idx].1.clone());
+                    attr_idx += 1;
+                }
+                changes.push(Change::Text(grapheme.to_string()));
+                cells_in_line += cells;
+            }
+            byte += grapheme.len();
+        }
+        if changes.len() > 1 {
+            self.lines.push(Line {
+                start_byte,
+                changes,
+            });
+        }
+    }
+
+    fn width(&self) -> usize {
+        self.last_render_size
+            .expect("Must render before accessing width")
+            .width
+    }
+
+    fn height(&self) -> usize {
+        self.last_render_size
+            .expect("Must render before accessing height")
+            .height
+    }
+
     fn process_key(&mut self, event: &KeyEvent) -> bool {
         match event {
             KeyEvent {
                 key: KeyCode::Char(' '),
                 ..
             } => {
-                self.line += self.height - 2;
+                // TODO saturating sub?
+                self.first_displayed_line += self.height() - 2;
                 true
             }
             KeyEvent {
                 key: KeyCode::Char('b'),
                 ..
             } => {
-                self.line -= self.height - 2;
+                self.first_displayed_line -= self.height() - 2;
                 true
             }
             KeyEvent {
                 key: KeyCode::Char('n'),
                 ..
             } => {
-                let x = &self.doc.links[self.link_idx];
-                self.link_idx += 1;
+                let link_idx = self.link_idx.unwrap_or(0);
+                let x = &self.doc.links[link_idx];
+                self.link_idx = Some(link_idx + 1);
                 (self.open_link)(x.link.uri());
                 true
             }
             KeyEvent { .. } => false,
-        }
-    }
-
-    fn new(doc: Document<'a>, open_link: Box<dyn FnMut(&str) + 'a>) -> DocumentWidget<'a> {
-        DocumentWidget {
-            doc,
-            open_link,
-            line: 0,
-            height: 0,
-            width: 0,
-            link_idx: 0,
         }
     }
 }
@@ -155,8 +273,10 @@ impl<'a> Widget for DocumentWidget<'a> {
         let (width, height) = args.surface.dimensions();
         assert!(width > 0);
         assert!(height > 0);
-        self.height = height;
-        self.width = width;
+        self.last_render_size = Some(Dimensions { width, height });
+        if self.lines.len() == 0 {
+            self.flow();
+        }
         let mut changes = vec![
             Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
@@ -164,47 +284,11 @@ impl<'a> Widget for DocumentWidget<'a> {
                 y: Absolute(0),
             },
         ];
-        use unicode_segmentation::UnicodeSegmentation;
-        let mut graphemes = self
-            .doc
-            .text
-            .graphemes(true)
-            .map(|g| (g, grapheme_column_width(g, None)));
-        let mut text_idx = 0;
-        let mut attr_index = 0;
-        let mut cells_in_line = 0;
-        let end = self.line + height;
-        let mut line = 0;
-        while line < end {
-            if let Some((grapheme, cells)) = graphemes.next() {
-                if cells_in_line + cells > width || grapheme == "\n" {
-                    line += 1;
-                    cells_in_line = 0;
-                    if line >= self.line && line < end {
-                        changes.push(Change::Text("\r\n".to_string()));
-                    }
-                }
-                if grapheme != "\n" {
-                    while attr_index < self.doc.attrs.len()
-                        && text_idx >= self.doc.attrs[attr_index].0
-                    {
-                        changes.push(self.doc.attrs[attr_index].1.clone());
-                        attr_index += 1;
-                    }
-                    if line >= self.line {
-                        changes.push(Change::Text(grapheme.to_string()));
-                    }
-                    cells_in_line += cells;
-                }
-                text_idx += grapheme.len();
-            } else {
-                // TODO - read more out of input. Simpler thing will be if graphemes is empty.
-                // More correct thing will be if we're within a grapheme of the end to see if
-                // there are any zwjs that need to be added to what's in the buffer.
-                // Maybe call next twice so we're two out?
-                break;
-            }
+        for line in &self.lines[self.first_displayed_line..self.first_displayed_line + height - 1] {
+            changes.extend_from_slice(&line.changes);
+            changes.push(Change::Text("\r\n".to_string()));
         }
+        changes.extend_from_slice(&self.lines[self.first_displayed_line + height - 1].changes);
         args.surface.add_changes(changes);
     }
 
