@@ -63,7 +63,7 @@ impl Document {
                             Sgr::Invisible(i) => AttributeChange::Invisible(i),
                             Sgr::StrikeThrough(s) => AttributeChange::StrikeThrough(s),
                             Sgr::Foreground(f) => AttributeChange::Foreground(f.into()),
-                            Sgr::Inverse(_) => todo!(),
+                            Sgr::Inverse(i) => AttributeChange::Reverse(i),
                             Sgr::UnderlineColor(_) => todo!(),
                             Sgr::Font(_) => todo!(),
                             Sgr::Overline(_) => todo!(),
@@ -132,7 +132,7 @@ struct DocumentWidget<'a> {
     lines: Vec<Line>,
     // Reverses the reverse display of bytes in these ranges.
     // If reverse is off for a byte, flips it on and vice versa.
-    // highlights: Vec<(usize, usize)>,
+    highlights: Vec<(usize, usize)>,
 }
 
 impl<'a> DocumentWidget<'a> {
@@ -144,6 +144,7 @@ impl<'a> DocumentWidget<'a> {
             last_render_size: None,
             link_idx: None,
             lines: vec![],
+            highlights: vec![],
         }
     }
 
@@ -290,6 +291,7 @@ impl<'a> DocumentWidget<'a> {
                 }
                 let link_idx = self.link_idx.unwrap_or(0);
                 let x = &self.doc.links[link_idx];
+                self.highlights = vec![(x.start, x.end)];
                 self.link_idx = Some(link_idx + 1);
                 (self.open_link)(x.link.uri());
                 for (idx, line) in self.lines.iter().enumerate() {
@@ -333,6 +335,9 @@ impl<'a> Widget for DocumentWidget<'a> {
             .graphemes(true)
             .map(|g| (g, grapheme_column_width(g, None)));
         let mut attr_idx = self.doc.attrs.partition_point(|(b, _)| *b < byte);
+        let mut highlight_idx = self.highlights.partition_point(|(_, e)| *e <= byte);
+        let mut highlight: Option<(usize, usize)> = None;
+        let mut reversed = first_line.start_attributes.reverse();
         let mut cells_in_line = 0;
         let mut line = self.first_displayed_line;
         let last_displayed_line = min(self.lines.len(), self.first_displayed_line + height) - 1;
@@ -346,9 +351,34 @@ impl<'a> Widget for DocumentWidget<'a> {
                 cells_in_line = 0;
             }
             if grapheme != "\n" {
+                if let Some(active_highlight) = highlight {
+                    if active_highlight.1 <= byte {
+                        highlight = None;
+                        changes.push(Change::Attribute(AttributeChange::Reverse(reversed)));
+                        highlight_idx += 1;
+                    }
+                } else if highlight_idx < self.highlights.len()
+                    && self.highlights[highlight_idx].0 <= byte
+                {
+                    highlight = Some(self.highlights[highlight_idx]);
+                    changes.push(Change::Attribute(AttributeChange::Reverse(!reversed)));
+                }
                 while attr_idx < self.doc.attrs.len() && byte >= self.doc.attrs[attr_idx].0 {
-                    changes.push(self.doc.attrs[attr_idx].1.clone());
+                    let mut change = self.doc.attrs[attr_idx].1.clone();
                     attr_idx += 1;
+                    if let Change::Attribute(AttributeChange::Reverse(new_reverse)) = change {
+                        reversed = new_reverse;
+                        if highlight.is_some() {
+                            change = Change::Attribute(AttributeChange::Reverse(!new_reverse));
+                        }
+                    }
+                    if let Change::AllAttributes(attr) = &mut change {
+                        reversed = false;
+                        if highlight.is_some() {
+                            attr.set_reverse(!attr.reverse());
+                        }
+                    }
+                    changes.push(change);
                 }
                 changes.push(Change::Text(grapheme.to_string()));
                 cells_in_line += cells;
@@ -548,7 +578,8 @@ mod tests {
     }
     #[test]
     fn visit_link() {
-        let input = "Before\n\x1b]8;;http://a.b\x1b\\Linked\x1b]8;;\x1b\\\nNot Linked";
+        let input =
+            "Before\n\x1b]8;;http://a.b\x1b\\\x1b[31mL\x1b[m\x1binked\x1b]8;;\x1b\\\nNot Linked";
         let mut ctx = create_test_ui(input, 10, 3);
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("B", cells[0].str());
@@ -558,6 +589,8 @@ mod tests {
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("L", cells[0].str());
+        assert!(cells[0].attrs().reverse());
+        assert!(cells[1].attrs().reverse());
         assert_eq!(vec!["http://a.b".to_string()], *ctx.visited.borrow());
     }
 
