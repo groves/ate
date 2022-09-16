@@ -26,7 +26,13 @@ struct LinkRange {
 }
 
 struct Document {
+    // The displayed characters of the input
+    // i.e. input bytes with control characters stripped out
     text: String,
+    // Display attrs to apply by byte index into text.
+    // Before the characters in text at .0 have been drawn,
+    // all changes with that offset should be applied.
+    // Stored in ascending order of .0
     attrs: Vec<(usize, Change)>,
     links: Vec<LinkRange>,
 }
@@ -64,6 +70,13 @@ impl Document {
                             Sgr::Reset => unreachable!(),
                         }),
                     };
+                    // This isn't parsing by grapheme, which may put this change in the middle of one.
+                    // We render by grapheme and changes in the middle of one will be applied
+                    // afterwards.
+                    // It's nonsensical to change graphical representation in the middle of a
+                    // grapheme, so I don't think that's an issue.
+                    // We do need to make sure to apply all graphical changes, not just those
+                    // that land on grapheme boundaries
                     attrs.push((text.len(), change));
                 }
                 Action::OperatingSystemCommand(osc) => {
@@ -95,10 +108,8 @@ impl Document {
 // Only valid for a particular text width due to reflowing
 struct Line {
     start_byte: usize,
-    // The changes to render this line assuming the cursor is at the start of it.
-    // Starts with the full set of active attributes to let it be used
-    // without the Surface containing the active render state
-    changes: Vec<Change>,
+    // The full set of active attributes to let set up this line for rendering.
+    start_attributes: CellAttributes,
 }
 
 #[derive(Clone, Copy)]
@@ -119,6 +130,9 @@ struct DocumentWidget<'a> {
     link_idx: Option<usize>,
     // Cache of doc.text flown at the last_render_size. Will be cleared if the size changes.
     lines: Vec<Line>,
+    // Reverses the reverse display of bytes in these ranges.
+    // If reverse is off for a byte, flips it on and vice versa.
+    // highlights: Vec<(usize, usize)>,
 }
 
 impl<'a> DocumentWidget<'a> {
@@ -133,87 +147,84 @@ impl<'a> DocumentWidget<'a> {
         }
     }
 
+    fn apply(attributes: &mut CellAttributes, a: &AttributeChange) {
+        use termwiz::cell::AttributeChange::*;
+        match a {
+            Intensity(value) => {
+                attributes.set_intensity(*value);
+            }
+            Underline(value) => {
+                attributes.set_underline(*value);
+            }
+            Italic(value) => {
+                attributes.set_italic(*value);
+            }
+            Blink(value) => {
+                attributes.set_blink(*value);
+            }
+            Reverse(value) => {
+                attributes.set_reverse(*value);
+            }
+            StrikeThrough(value) => {
+                attributes.set_strikethrough(*value);
+            }
+            Invisible(value) => {
+                attributes.set_invisible(*value);
+            }
+            Foreground(value) => {
+                attributes.set_foreground(*value);
+            }
+            Background(value) => {
+                attributes.set_background(*value);
+            }
+            Hyperlink(value) => {
+                attributes.set_hyperlink(value.clone());
+            }
+        };
+    }
+
     fn flow(&mut self) {
+        self.lines.clear();
+
         let width = self.width();
+        let mut byte = 0;
         use unicode_segmentation::UnicodeSegmentation;
         let graphemes = self
             .doc
             .text
             .graphemes(true)
             .map(|g| (g, grapheme_column_width(g, None)));
-
-        self.lines.clear();
-        let mut start_byte = 0;
-        let mut changes = vec![Change::AllAttributes(CellAttributes::default())];
-
         let mut attr_idx = 0;
         let mut cells_in_line = 0;
-        let mut byte = 0;
         let mut attributes = CellAttributes::default();
+        self.lines.push(Line {
+            start_byte: byte,
+            start_attributes: attributes.clone(),
+        });
         for (grapheme, cells) in graphemes {
             if cells_in_line + cells > width || grapheme == "\n" {
                 self.lines.push(Line {
-                    start_byte,
-                    changes,
+                    start_byte: if grapheme == "\n" { byte + 1 } else { byte },
+                    start_attributes: attributes.clone(),
                 });
-                changes = vec![Change::AllAttributes(attributes.clone())];
-                start_byte = byte;
                 cells_in_line = 0;
             }
             if grapheme != "\n" {
                 while attr_idx < self.doc.attrs.len() && byte >= self.doc.attrs[attr_idx].0 {
-                    use termwiz::cell::AttributeChange::*;
                     match &self.doc.attrs[attr_idx].1 {
-                        Change::Attribute(a) => match a {
-                            Intensity(value) => {
-                                attributes.set_intensity(*value);
-                            }
-                            Underline(value) => {
-                                attributes.set_underline(*value);
-                            }
-                            Italic(value) => {
-                                attributes.set_italic(*value);
-                            }
-                            Blink(value) => {
-                                attributes.set_blink(*value);
-                            }
-                            Reverse(value) => {
-                                attributes.set_reverse(*value);
-                            }
-                            StrikeThrough(value) => {
-                                attributes.set_strikethrough(*value);
-                            }
-                            Invisible(value) => {
-                                attributes.set_invisible(*value);
-                            }
-                            Foreground(value) => {
-                                attributes.set_foreground(*value);
-                            }
-                            Background(value) => {
-                                attributes.set_background(*value);
-                            }
-                            Hyperlink(value) => {
-                                attributes.set_hyperlink(value.clone());
-                            }
-                        },
                         Change::AllAttributes(_) => {
                             attributes = CellAttributes::default();
                         }
+                        Change::Attribute(a) => {
+                            Self::apply(&mut attributes, a);
+                        }
                         _ => unreachable!(),
                     }
-                    changes.push(self.doc.attrs[attr_idx].1.clone());
                     attr_idx += 1;
                 }
-                changes.push(Change::Text(grapheme.to_string()));
                 cells_in_line += cells;
             }
             byte += grapheme.len();
-        }
-        if changes.len() > 1 {
-            self.lines.push(Line {
-                start_byte,
-                changes,
-            });
         }
     }
 
@@ -295,29 +306,55 @@ impl<'a> DocumentWidget<'a> {
 }
 
 impl<'a> Widget for DocumentWidget<'a> {
-    // TODO - Reads from the underlying stream if it hasn't been exhausted and more data is needed to fill
-    // the lines.
     fn render(&mut self, args: &mut RenderArgs) {
         let (width, height) = args.surface.dimensions();
         assert!(width > 0);
         assert!(height > 0);
         self.last_render_size = Some(Dimensions { width, height });
         if self.lines.len() == 0 {
+            // TODO - Only flow the lines necessary to render this screen.
+            // Read from the underlying stream if at the point of flowing.
             self.flow();
         }
+        let first_line = &self.lines[self.first_displayed_line];
         let mut changes = vec![
             Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
                 x: Absolute(0),
                 y: Absolute(0),
             },
+            Change::AllAttributes(first_line.start_attributes.clone()),
         ];
+
+        let width = self.width();
+        let mut byte = first_line.start_byte;
+        use unicode_segmentation::UnicodeSegmentation;
+        let graphemes = self.doc.text[byte..]
+            .graphemes(true)
+            .map(|g| (g, grapheme_column_width(g, None)));
+        let mut attr_idx = self.doc.attrs.partition_point(|(b, _)| *b < byte);
+        let mut cells_in_line = 0;
+        let mut line = self.first_displayed_line;
         let last_displayed_line = min(self.lines.len(), self.first_displayed_line + height) - 1;
-        for line in &self.lines[self.first_displayed_line..last_displayed_line] {
-            changes.extend_from_slice(&line.changes);
-            changes.push(Change::Text("\r\n".to_string()));
+        for (grapheme, cells) in graphemes {
+            if cells_in_line + cells > width || grapheme == "\n" {
+                if line == last_displayed_line {
+                    break;
+                }
+                changes.push(Change::Text("\r\n".to_string()));
+                line += 1;
+                cells_in_line = 0;
+            }
+            if grapheme != "\n" {
+                while attr_idx < self.doc.attrs.len() && byte >= self.doc.attrs[attr_idx].0 {
+                    changes.push(self.doc.attrs[attr_idx].1.clone());
+                    attr_idx += 1;
+                }
+                changes.push(Change::Text(grapheme.to_string()));
+                cells_in_line += cells;
+            }
+            byte += grapheme.len();
         }
-        changes.extend_from_slice(&self.lines[last_displayed_line].changes);
         args.surface.add_changes(changes);
     }
 
@@ -423,7 +460,7 @@ fn main() -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::{cell::RefCell, io::Cursor, rc::Rc};
 
     use termwiz::{color::ColorAttribute, input::Modifiers, surface::Surface};
 
@@ -432,21 +469,30 @@ mod tests {
     struct Context<'a> {
         ui: Ui<'a>,
         surface: Surface,
+        visited: Rc<RefCell<Vec<String>>>,
     }
 
     fn create_test_ui(input: &str, width: usize, height: usize) -> Context {
+        let visited = Rc::new(RefCell::new(vec![]));
+        let ctx_visited = visited.clone();
         let mut ui = create_ui(
             Box::new(Cursor::new(input.to_string())),
             width,
             height,
-            Box::new(|_uri| {}),
+            Box::new(move |uri| {
+                visited.borrow_mut().push(uri.to_string());
+            }),
         )
         .unwrap();
         let mut surface = Surface::new(width, height);
         // Render twice to test if we're stepping on ourselves
         ui.render_to_screen(&mut surface).unwrap();
         ui.render_to_screen(&mut surface).unwrap();
-        Context { ui, surface }
+        Context {
+            ui,
+            visited: ctx_visited,
+            surface,
+        }
     }
 
     #[test]
@@ -478,7 +524,7 @@ mod tests {
 
     #[test]
     fn page() {
-        let input = "1\n2\n3\n4\n5\n6\n";
+        let input = "1\n2\n3\n4\n5\n6";
         let mut ctx = create_test_ui(input, 1, 5);
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         let cells = &ctx.surface.screen_cells()[0];
@@ -506,11 +552,13 @@ mod tests {
         let mut ctx = create_test_ui(input, 10, 3);
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("B", cells[0].str());
+        assert_eq!(0, ctx.visited.borrow().len());
         ctx.ui.queue_event(press_char_event('n'));
         ctx.ui.process_event_queue().unwrap();
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("L", cells[0].str());
+        assert_eq!(vec!["http://a.b".to_string()], *ctx.visited.borrow());
     }
 
     fn parse_links(input: &str) -> Vec<LinkRange> {
