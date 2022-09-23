@@ -15,7 +15,7 @@
       devShell = pkgs.mkShell {
         packages = with pkgs;
           [cargo clippy rust-analyzer rustc rustfmt]
-          ++ (lib.optional stdenv.isLinux rr);
+          ++ (lib.optional (stdenv.isLinux && stdenv.isx86_64) rr);
       };
     });
 }
