@@ -1,16 +1,19 @@
+use std::cell::RefCell;
 use std::cmp::{max, min};
 use std::io::{stdin, Read};
 use std::process::Command;
+use std::rc::Rc;
 
 use crate::doc::Document;
 use termwiz::caps::Capabilities;
-use termwiz::cell::{grapheme_column_width, AttributeChange, CellAttributes};
-use termwiz::color::ColorAttribute;
+use termwiz::cell::{grapheme_column_width, unicode_column_width, AttributeChange, CellAttributes};
+use termwiz::color::{AnsiColor, ColorAttribute};
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
 use termwiz::surface::{Change, Position::Absolute};
 
 use termwiz::terminal::buffered::BufferedTerminal;
 use termwiz::terminal::{new_terminal, Terminal};
+use termwiz::widgets::layout::{ChildOrientation, Constraints};
 use termwiz::widgets::{RenderArgs, Ui, UpdateArgs, Widget, WidgetEvent};
 use termwiz::Error;
 mod doc;
@@ -30,11 +33,8 @@ struct Dimensions {
 
 struct DocumentWidget<'a> {
     doc: Document,
+    status: Rc<RefCell<Status>>,
     open_link: Box<dyn FnMut(&str) + 'a>,
-    // Used for paging forward and backwards.
-    // In reflow, the start_byte of this line is kept in the first_displayed_line of the reflowed
-    // lines
-    first_displayed_line: usize,
     last_render_size: Option<Dimensions>,
     // The last link we opened
     link_idx: Option<usize>,
@@ -46,11 +46,15 @@ struct DocumentWidget<'a> {
 }
 
 impl<'a> DocumentWidget<'a> {
-    fn new(doc: Document, open_link: Box<dyn FnMut(&str) + 'a>) -> DocumentWidget<'a> {
+    fn new(
+        doc: Document,
+        status: Rc<RefCell<Status>>,
+        open_link: Box<dyn FnMut(&str) + 'a>,
+    ) -> DocumentWidget<'a> {
         DocumentWidget {
             doc,
             open_link,
-            first_displayed_line: 0,
+            status,
             last_render_size: None,
             link_idx: None,
             lines: vec![],
@@ -137,6 +141,18 @@ impl<'a> DocumentWidget<'a> {
             }
             byte += grapheme.len();
         }
+        self.status.borrow_mut().total_lines = Some(self.lines.len())
+    }
+
+    fn line(&self) -> usize {
+        self.status.borrow().line
+    }
+
+    // Used for paging forward and backwards.
+    // In reflow, the start_byte of this line is kept in the first_displayed_line of the reflowed
+    // lines
+    fn set_line(&self, line: usize) {
+        self.status.borrow_mut().line = line;
     }
 
     fn width(&self) -> usize {
@@ -152,14 +168,14 @@ impl<'a> DocumentWidget<'a> {
     }
 
     fn backward(&mut self, lines: usize) {
-        self.first_displayed_line = self.first_displayed_line.saturating_sub(lines);
+        self.set_line(self.line().saturating_sub(lines));
     }
 
     fn forward(&mut self, lines: usize) {
-        self.first_displayed_line = min(
+        self.set_line(min(
             self.lines.len().saturating_sub(self.height()),
-            self.first_displayed_line + max(1, lines),
-        );
+            self.line() + max(1, lines),
+        ));
     }
 
     fn process_key(&mut self, event: &KeyEvent) -> bool {
@@ -206,7 +222,7 @@ impl<'a> DocumentWidget<'a> {
                 (self.open_link)(x.link.uri());
                 for (idx, line) in self.lines.iter().enumerate() {
                     if line.start_byte > x.start {
-                        self.first_displayed_line = idx.saturating_sub(1);
+                        self.set_line(idx.saturating_sub(1));
                         break;
                     }
                 }
@@ -223,12 +239,13 @@ impl<'a> Widget for DocumentWidget<'a> {
         assert!(width > 0);
         assert!(height > 0);
         self.last_render_size = Some(Dimensions { width, height });
+        self.status.borrow_mut().page_lines = Some(height);
         if self.lines.len() == 0 {
             // TODO - Only flow the lines necessary to render this screen.
             // Read from the underlying stream if at the point of flowing.
             self.flow();
         }
-        let first_line = &self.lines[self.first_displayed_line];
+        let first_line = &self.lines[self.line()];
         let mut changes = vec![
             Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
@@ -252,8 +269,8 @@ impl<'a> Widget for DocumentWidget<'a> {
         // the highlight
         let mut reversed = first_line.start_attributes.reverse();
         let mut cells_in_line = 0;
-        let mut line = self.first_displayed_line;
-        let last_displayed_line = min(self.lines.len(), self.first_displayed_line + height) - 1;
+        let mut line = self.line();
+        let last_displayed_line = min(self.lines.len(), line + height) - 1;
         for (grapheme, cells) in graphemes {
             if cells_in_line + cells > width || grapheme == "\n" {
                 if line == last_displayed_line {
@@ -311,17 +328,115 @@ impl<'a> Widget for DocumentWidget<'a> {
     }
 }
 
+struct Status {
+    doc_name: String,
+    // First displayed line
+    line: usize,
+    // Total lines to display if the length of the file is known
+    total_lines: Option<usize>,
+    // Lines shown in a single page
+    page_lines: Option<usize>,
+}
+
+impl Status {
+    fn percent(&self) -> Option<u8> {
+        if self.line == 0 {
+            return Some(0);
+        }
+        let total_lines = match self.total_lines {
+            None => {
+                return None;
+            }
+            Some(tl) => tl,
+        };
+        let final_page_line = total_lines - self.page_lines.unwrap_or(0);
+        if final_page_line == self.line {
+            Some(100)
+        } else {
+            let percent = (self.line as f64 / (final_page_line as f64)) * 100.0;
+            Some(percent.floor() as u8)
+        }
+    }
+}
+
+// This is a little status line widget that we render at the bottom
+struct StatusLine {
+    status: Rc<RefCell<Status>>,
+}
+
+impl Widget for StatusLine {
+    fn render(&mut self, args: &mut RenderArgs) {
+        args.surface
+            .add_change(Change::ClearScreen(AnsiColor::Grey.into()));
+        args.surface.add_change(Change::CursorPosition {
+            x: Absolute(0),
+            y: Absolute(0),
+        });
+        let doc_name = &self.status.borrow().doc_name;
+        let doc_name_width = unicode_column_width(&doc_name, None);
+        args.surface.add_change(Change::Text(doc_name.to_string()));
+        let progress = match self.status.borrow().percent() {
+            Some(p) => format!("{}%", p),
+            None => "?%".to_string(),
+        };
+        let progress_width = unicode_column_width(&progress, None);
+        let surface_width = args.surface.dimensions().0;
+        if surface_width.saturating_sub(doc_name_width + progress_width) < 1 {
+            return;
+        }
+        args.surface.add_change(Change::CursorPosition {
+            x: Absolute(surface_width - progress_width),
+            y: Absolute(0),
+        });
+        args.surface.add_change(Change::Text(progress));
+    }
+
+    fn get_size_constraints(&self) -> Constraints {
+        let mut c = Constraints::default();
+        c.set_fixed_height(1);
+        c
+    }
+}
+
+/// This is the main container widget for the app
+struct MainScreen {}
+
+impl MainScreen {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Widget for MainScreen {
+    fn render(&mut self, _args: &mut RenderArgs) {}
+
+    fn get_size_constraints(&self) -> Constraints {
+        // Switch from default horizontal layout to vertical layout
+        let mut c = Constraints::default();
+        c.child_orientation = ChildOrientation::Vertical;
+        c
+    }
+}
+
 fn create_ui<'a>(
     input: Box<dyn Read + 'a>,
+    doc_name: String,
     width: usize,
     height: usize,
     open_link: Box<dyn FnMut(&str) + 'a>,
 ) -> Result<Ui<'a>, Error> {
-    let doc = Document::new(input)?;
-    let widget = DocumentWidget::new(doc, open_link);
     let mut ui = Ui::new();
-    let root_id = ui.set_root(widget);
-    ui.set_focus(root_id);
+    let root_id = ui.set_root(MainScreen::new());
+    let doc = Document::new(input)?;
+    let status = Rc::new(RefCell::new(Status {
+        doc_name,
+        line: 0,
+        total_lines: None,
+        page_lines: None,
+    }));
+    let doc_id = ui.add_child(root_id, DocumentWidget::new(doc, status.clone(), open_link));
+    ui.set_focus(doc_id);
+    ui.add_child(root_id, StatusLine { status });
 
     // Send a resize event through to get us to do an initial layout
     ui.queue_event(WidgetEvent::Input(InputEvent::Resized {
@@ -342,6 +457,7 @@ fn main() -> Result<(), Error> {
 
     let mut ui = create_ui(
         Box::new(stdin()),
+        "stdin".to_string(),
         size.cols,
         size.rows,
         Box::new(|uri| {
@@ -420,6 +536,7 @@ mod tests {
         let ctx_visited = visited.clone();
         let mut ui = create_ui(
             Box::new(Cursor::new(input.to_string())),
+            "tst".to_string(),
             width,
             height,
             Box::new(move |uri| {
@@ -441,7 +558,7 @@ mod tests {
     #[test]
     fn render_color() {
         let input = "D\x1b[31mR\x1b[mD";
-        let mut ctx = create_test_ui(input, 3, 1);
+        let mut ctx = create_test_ui(input, 3, 2);
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!(ColorAttribute::Default, cells[0].attrs().foreground());
         assert_eq!(
@@ -449,13 +566,13 @@ mod tests {
             cells[1].attrs().foreground()
         );
         assert_eq!(ColorAttribute::Default, cells[2].attrs().foreground());
-        assert_eq!(ctx.surface.screen_chars_to_string(), "DRD\n");
+        assert_eq!(ctx.surface.screen_chars_to_string(), "DRD\ntst\n");
     }
 
     #[test]
     fn render_short_doc() {
-        let ctx = create_test_ui("Hi Bye", 3, 2);
-        assert_eq!(ctx.surface.screen_chars_to_string(), "Hi \nBye\n");
+        let ctx = create_test_ui("Hi Bye", 3, 3);
+        assert_eq!(ctx.surface.screen_chars_to_string(), "Hi \nBye\ntst\n");
     }
 
     fn press_char_event(c: char) -> WidgetEvent {
@@ -468,7 +585,7 @@ mod tests {
     #[test]
     fn page() {
         let input = "1\n2\n3\n4\n5\n6";
-        let mut ctx = create_test_ui(input, 1, 5);
+        let mut ctx = create_test_ui(input, 3, 6);
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("1", cells[0].str());
@@ -478,8 +595,9 @@ mod tests {
         ctx.ui.queue_event(press_char_event(' '));
         ctx.ui.process_event_queue().unwrap();
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
+        let screen = ctx.surface.screen_chars_to_string();
         let cells = &ctx.surface.screen_cells()[0];
-        assert_eq!("2", cells[0].str());
+        assert_eq!("2", cells[0].str(), "{}", screen);
 
         ctx.ui.queue_event(press_char_event('b'));
         // Going back while at the first line should stay at the first line
@@ -494,7 +612,7 @@ mod tests {
     fn visit_link() {
         let input =
             "Before\n\x1b]8;;http://a.b\x1b\\\x1b[31mL\x1b[m\x1binked\x1b]8;;\x1b\\\nNot Linked";
-        let mut ctx = create_test_ui(input, 10, 3);
+        let mut ctx = create_test_ui(input, 10, 4);
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("B", cells[0].str());
         assert_eq!(0, ctx.visited.borrow().len());
