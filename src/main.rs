@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::cmp::{max, min};
 use std::io::{stdin, Read};
 use std::process::Command;
@@ -9,12 +9,15 @@ use termwiz::caps::Capabilities;
 use termwiz::cell::{grapheme_column_width, unicode_column_width, AttributeChange, CellAttributes};
 use termwiz::color::{AnsiColor, ColorAttribute};
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
+use termwiz::surface::CursorShape;
 use termwiz::surface::{Change, Position::Absolute};
 
 use termwiz::terminal::buffered::BufferedTerminal;
 use termwiz::terminal::{new_terminal, Terminal};
 use termwiz::widgets::layout::{ChildOrientation, Constraints};
-use termwiz::widgets::{RenderArgs, Ui, UpdateArgs, Widget, WidgetEvent};
+use termwiz::widgets::{
+    ParentRelativeCoords, RenderArgs, Ui, UpdateArgs, Widget, WidgetEvent, WidgetId,
+};
 use termwiz::Error;
 mod doc;
 
@@ -32,8 +35,7 @@ struct Dimensions {
 }
 
 struct DocumentWidget<'a> {
-    doc: Document,
-    status: Rc<RefCell<Status>>,
+    ctx: RefCtx,
     open_link: Box<dyn FnMut(&str) + 'a>,
     last_render_size: Option<Dimensions>,
     // The last link we opened
@@ -43,18 +45,25 @@ struct DocumentWidget<'a> {
     // Reverses the reverse display of bytes in these ranges.
     // If reverse is off for a byte, flips it on and vice versa.
     highlights: Vec<(usize, usize)>,
+    // First displayed line
+    // Used for paging forward and backwards.
+    // In reflow, the start_byte of this line is kept in the first_displayed_line of the reflowed
+    // lines
+    line: usize,
+    // Total lines to display if the length of the file is known
+    total_lines: Option<usize>,
+    // Lines shown in a single page
+    page_lines: Option<usize>,
 }
 
 impl<'a> DocumentWidget<'a> {
-    fn new(
-        doc: Document,
-        status: Rc<RefCell<Status>>,
-        open_link: Box<dyn FnMut(&str) + 'a>,
-    ) -> DocumentWidget<'a> {
+    fn new(ctx: RefCtx, open_link: Box<dyn FnMut(&str) + 'a>) -> DocumentWidget<'a> {
         DocumentWidget {
-            doc,
             open_link,
-            status,
+            ctx,
+            line: 0,
+            total_lines: None,
+            page_lines: None,
             last_render_size: None,
             link_idx: None,
             lines: vec![],
@@ -101,11 +110,11 @@ impl<'a> DocumentWidget<'a> {
     fn flow(&mut self) {
         self.lines.clear();
 
+        let doc = &self.ctx.doc;
         let width = self.width();
         let mut byte = 0;
         use unicode_segmentation::UnicodeSegmentation;
-        let graphemes = self
-            .doc
+        let graphemes = doc
             .text
             .graphemes(true)
             .map(|g| (g, grapheme_column_width(g, None)));
@@ -125,8 +134,8 @@ impl<'a> DocumentWidget<'a> {
                 cells_in_line = 0;
             }
             if grapheme != "\n" {
-                while attr_idx < self.doc.attrs.len() && byte >= self.doc.attrs[attr_idx].0 {
-                    match &self.doc.attrs[attr_idx].1 {
+                while attr_idx < doc.attrs.len() && byte >= doc.attrs[attr_idx].0 {
+                    match &doc.attrs[attr_idx].1 {
                         Change::AllAttributes(_) => {
                             attributes = CellAttributes::default();
                         }
@@ -141,18 +150,7 @@ impl<'a> DocumentWidget<'a> {
             }
             byte += grapheme.len();
         }
-        self.status.borrow_mut().total_lines = Some(self.lines.len())
-    }
-
-    fn line(&self) -> usize {
-        self.status.borrow().line
-    }
-
-    // Used for paging forward and backwards.
-    // In reflow, the start_byte of this line is kept in the first_displayed_line of the reflowed
-    // lines
-    fn set_line(&self, line: usize) {
-        self.status.borrow_mut().line = line;
+        self.total_lines = Some(self.lines.len())
     }
 
     fn width(&self) -> usize {
@@ -168,14 +166,38 @@ impl<'a> DocumentWidget<'a> {
     }
 
     fn backward(&mut self, lines: usize) {
-        self.set_line(self.line().saturating_sub(lines));
+        self.set_line(self.line.saturating_sub(lines));
     }
 
     fn forward(&mut self, lines: usize) {
         self.set_line(min(
             self.lines.len().saturating_sub(self.height()),
-            self.line() + max(1, lines),
+            self.line + max(1, lines),
         ));
+    }
+
+    fn set_line(&mut self, line: usize) {
+        self.line = line;
+        self.ctx.percent.set(self.percent());
+    }
+
+    fn percent(&self) -> Option<u8> {
+        if self.line == 0 {
+            return Some(0);
+        }
+        let total_lines = match self.total_lines {
+            None => {
+                return None;
+            }
+            Some(tl) => tl,
+        };
+        let final_page_line = total_lines - self.page_lines.unwrap_or(0);
+        if final_page_line == self.line {
+            Some(100)
+        } else {
+            let percent = (self.line as f64 / (final_page_line as f64)) * 100.0;
+            Some(percent.floor() as u8)
+        }
     }
 
     fn process_key(&mut self, event: &KeyEvent) -> bool {
@@ -212,11 +234,11 @@ impl<'a> DocumentWidget<'a> {
                 key: KeyCode::Char('n'),
                 ..
             } => {
-                if self.doc.links.len() == 0 {
+                if self.ctx.doc.links.len() == 0 {
                     return true;
                 }
                 let link_idx = self.link_idx.unwrap_or(0);
-                let x = &self.doc.links[link_idx];
+                let x = &self.ctx.doc.links[link_idx];
                 self.highlights = vec![(x.start, x.end)];
                 self.link_idx = Some(link_idx + 1);
                 (self.open_link)(x.link.uri());
@@ -239,13 +261,17 @@ impl<'a> Widget for DocumentWidget<'a> {
         assert!(width > 0);
         assert!(height > 0);
         self.last_render_size = Some(Dimensions { width, height });
-        self.status.borrow_mut().page_lines = Some(height);
+
         if self.lines.len() == 0 {
             // TODO - Only flow the lines necessary to render this screen.
             // Read from the underlying stream if at the point of flowing.
             self.flow();
         }
-        let first_line = &self.lines[self.line()];
+        self.page_lines = Some(height);
+        self.ctx.percent.set(self.percent());
+
+        let mut line = self.line;
+        let first_line = &self.lines[line];
         let mut changes = vec![
             Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
@@ -258,10 +284,11 @@ impl<'a> Widget for DocumentWidget<'a> {
         let width = self.width();
         let mut byte = first_line.start_byte;
         use unicode_segmentation::UnicodeSegmentation;
-        let graphemes = self.doc.text[byte..]
+        let doc = &self.ctx.doc;
+        let graphemes = doc.text[byte..]
             .graphemes(true)
             .map(|g| (g, grapheme_column_width(g, None)));
-        let mut attr_idx = self.doc.attrs.partition_point(|(b, _)| *b < byte);
+        let mut attr_idx = doc.attrs.partition_point(|(b, _)| *b < byte);
         let mut highlight_idx = self.highlights.partition_point(|(_, e)| *e <= byte);
         let mut highlight: Option<(usize, usize)> = None;
         // Tracks the inverse sgr state for byte.
@@ -269,7 +296,6 @@ impl<'a> Widget for DocumentWidget<'a> {
         // the highlight
         let mut reversed = first_line.start_attributes.reverse();
         let mut cells_in_line = 0;
-        let mut line = self.line();
         let last_displayed_line = min(self.lines.len(), line + height) - 1;
         for (grapheme, cells) in graphemes {
             if cells_in_line + cells > width || grapheme == "\n" {
@@ -293,8 +319,8 @@ impl<'a> Widget for DocumentWidget<'a> {
                     highlight = Some(self.highlights[highlight_idx]);
                     changes.push(Change::Attribute(AttributeChange::Reverse(!reversed)));
                 }
-                while attr_idx < self.doc.attrs.len() && byte >= self.doc.attrs[attr_idx].0 {
-                    let mut change = self.doc.attrs[attr_idx].1.clone();
+                while attr_idx < doc.attrs.len() && byte >= doc.attrs[attr_idx].0 {
+                    let mut change = doc.attrs[attr_idx].1.clone();
                     attr_idx += 1;
                     if let Change::Attribute(AttributeChange::Reverse(new_reverse)) = change {
                         reversed = new_reverse;
@@ -326,42 +352,17 @@ impl<'a> Widget for DocumentWidget<'a> {
             },
         }
     }
-}
 
-struct Status {
-    doc_name: String,
-    // First displayed line
-    line: usize,
-    // Total lines to display if the length of the file is known
-    total_lines: Option<usize>,
-    // Lines shown in a single page
-    page_lines: Option<usize>,
-}
-
-impl Status {
-    fn percent(&self) -> Option<u8> {
-        if self.line == 0 {
-            return Some(0);
-        }
-        let total_lines = match self.total_lines {
-            None => {
-                return None;
-            }
-            Some(tl) => tl,
-        };
-        let final_page_line = total_lines - self.page_lines.unwrap_or(0);
-        if final_page_line == self.line {
-            Some(100)
-        } else {
-            let percent = (self.line as f64 / (final_page_line as f64)) * 100.0;
-            Some(percent.floor() as u8)
-        }
+    fn get_size_constraints(&self) -> Constraints {
+        let mut c = Constraints::default();
+        c.set_fixed_height(self.ctx.doc_height());
+        c
     }
 }
 
 // This is a little status line widget that we render at the bottom
 struct StatusLine {
-    status: Rc<RefCell<Status>>,
+    ctx: RefCtx,
 }
 
 impl Widget for StatusLine {
@@ -372,10 +373,10 @@ impl Widget for StatusLine {
             x: Absolute(0),
             y: Absolute(0),
         });
-        let doc_name = &self.status.borrow().doc_name;
+        let doc_name = &self.ctx.doc_name;
         let doc_name_width = unicode_column_width(&doc_name, None);
         args.surface.add_change(Change::Text(doc_name.to_string()));
-        let progress = match self.status.borrow().percent() {
+        let progress = match self.ctx.percent.get() {
             Some(p) => format!("{}%", p),
             None => "?%".to_string(),
         };
@@ -398,12 +399,114 @@ impl Widget for StatusLine {
     }
 }
 
+struct Search {
+    ctx: RefCtx,
+    search: String,
+}
+
+impl Search {
+    fn process_key(&mut self, event: &KeyEvent) -> bool {
+        match event {
+            KeyEvent {
+                key: KeyCode::Char('/'),
+                ..
+            } => {
+                self.ctx.deactivate_search();
+                true
+            }
+            KeyEvent {
+                key: KeyCode::Char(c),
+                ..
+            } => {
+                self.search.push(*c);
+                true
+            }
+            KeyEvent {
+                key: KeyCode::Backspace,
+                ..
+            } => {
+                self.search.pop();
+                true
+            }
+            KeyEvent {
+                key: KeyCode::DownArrow,
+                ..
+            } => true,
+            _ => false,
+        }
+    }
+}
+
+impl Widget for Search {
+    fn render(&mut self, args: &mut RenderArgs) {
+        let (width, height) = args.surface.dimensions();
+        if height == 0 {
+            return;
+        }
+        let mut changes = vec![
+            Change::ClearScreen(ColorAttribute::Default),
+            Change::CursorPosition {
+                x: Absolute(0),
+                y: Absolute(0),
+            },
+            Change::Text("-".repeat(width)),
+        ];
+        for link in &self.ctx.doc.links[..height - 2] {
+            changes.push(Change::Text(format!("{}\r\n", link.link.uri())));
+        }
+        let search_label = format!("Search: {}", self.search);
+        args.cursor.coords = ParentRelativeCoords {
+            x: search_label.len(),
+            y: height - 1,
+        };
+        args.cursor.shape = CursorShape::BlinkingBar;
+        changes.extend(vec![
+            Change::CursorPosition {
+                x: Absolute(0),
+                y: Absolute(height - 1),
+            },
+            Change::Text(search_label),
+        ]);
+        args.surface.add_changes(changes);
+    }
+
+    fn get_size_constraints(&self) -> Constraints {
+        let mut c = Constraints::default();
+        c.set_fixed_height(self.ctx.search_height());
+        c
+    }
+
+    fn process_event(&mut self, event: &WidgetEvent, _args: &mut UpdateArgs) -> bool {
+        match event {
+            WidgetEvent::Input(i) => match i {
+                InputEvent::Key(k) => self.process_key(k),
+                InputEvent::Paste(s) => {
+                    self.search.push_str(&s);
+                    true
+                }
+                _ => false,
+            },
+        }
+    }
+}
+
 /// This is the main container widget for the app
-struct MainScreen {}
+struct MainScreen {
+    ctx: RefCtx,
+}
 
 impl MainScreen {
-    pub fn new() -> Self {
-        Self {}
+    fn process_key(&mut self, event: &KeyEvent) -> bool {
+        match event {
+            KeyEvent {
+                key: KeyCode::Char('/'),
+                ..
+            } => {
+                self.ctx.activate_search();
+                true
+            }
+            _ => false,
+        }
     }
 }
 
@@ -416,6 +519,135 @@ impl Widget for MainScreen {
         c.child_orientation = ChildOrientation::Vertical;
         c
     }
+
+    fn process_event(&mut self, event: &WidgetEvent, _args: &mut UpdateArgs) -> bool {
+        match event {
+            WidgetEvent::Input(i) => match i {
+                InputEvent::Key(k) => self.process_key(k),
+                _ => false,
+            },
+        }
+    }
+}
+
+struct Ctx {
+    doc: Document,
+    doc_name: String,
+    search: Cell<WidgetId>,
+    doc_widget: Cell<WidgetId>,
+
+    percent: Cell<Option<u8>>,
+    focus: Cell<WidgetId>,
+    term_dims: Cell<Dimensions>,
+}
+
+impl Ctx {
+    fn search_visible(&self) -> bool {
+        self.focus.get() == self.search.get()
+    }
+
+    fn activate_search(&self) {
+        self.focus.set(self.search.get());
+    }
+
+    fn deactivate_search(&self) {
+        self.focus.set(self.doc_widget.get());
+    }
+
+    fn all_but_status_height(&self) -> u16 {
+        self.term_dims.get().height as u16 - 1
+    }
+
+    fn half_height(&self) -> u16 {
+        self.all_but_status_height() / 2
+    }
+
+    fn search_height(&self) -> u16 {
+        if self.search_visible() {
+            self.half_height()
+        } else {
+            0
+        }
+    }
+
+    fn doc_height(&self) -> u16 {
+        if self.search_visible() {
+            self.half_height() + (self.all_but_status_height() % 2)
+        } else {
+            self.all_but_status_height()
+        }
+    }
+}
+
+type RefCtx = Rc<Ctx>;
+
+struct Ate<'a, T: Terminal> {
+    ctx: RefCtx,
+    term: BufferedTerminal<T>,
+    ui: Ui<'a>,
+}
+
+impl<'a, T: Terminal> Ate<'a, T> {
+    fn run(&mut self) -> Result<(), Error> {
+        loop {
+            let size = self.term.terminal().get_screen_size()?;
+            self.ctx.term_dims.set(Dimensions {
+                width: size.cols,
+                height: size.rows,
+            });
+            self.ui.process_event_queue()?;
+            self.ui.set_focus(self.ctx.focus.get());
+
+            // After updating and processing all of the widgets, compose them
+            // and render them to the screen.
+            if self.ui.render_to_screen(&mut self.term)? {
+                // We have more events to process immediately; don't block waiting
+                // for input below, but jump to the top of the loop to re-run the
+                // updates.
+                continue;
+            }
+            // Compute an optimized delta to apply to the terminal and display it
+            self.term.flush()?;
+
+            // Wait for user input
+            match self.term.terminal().poll_input(None) {
+                Ok(Some(input)) => match input {
+                    InputEvent::Resized { rows, cols } => {
+                        // FIXME: this is working around a bug where we don't realize
+                        // that we should redraw everything on resize in BufferedTerminal.
+                        self.term
+                            .add_change(Change::ClearScreen(Default::default()));
+                        self.term.resize(cols, rows);
+                        self.ctx.term_dims.set(Dimensions {
+                            width: cols,
+                            height: rows,
+                        });
+                        self.ui.queue_event(WidgetEvent::Input(input));
+                    }
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Escape,
+                        ..
+                    })
+                    | InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('q'),
+                        ..
+                    }) => {
+                        // Quit the app when escape or q is pressed
+                        break;
+                    }
+                    _ => {
+                        // Feed input into the Ui
+                        self.ui.queue_event(WidgetEvent::Input(input));
+                    }
+                },
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 fn create_ui<'a>(
@@ -424,19 +656,34 @@ fn create_ui<'a>(
     width: usize,
     height: usize,
     open_link: Box<dyn FnMut(&str) + 'a>,
-) -> Result<Ui<'a>, Error> {
-    let mut ui = Ui::new();
-    let root_id = ui.set_root(MainScreen::new());
+) -> Result<(Ui<'a>, RefCtx), Error> {
     let doc = Document::new(input)?;
-    let status = Rc::new(RefCell::new(Status {
+    let placeholder_id = Cell::new(WidgetId::new());
+    let ctx = Rc::new(Ctx {
+        doc,
         doc_name,
-        line: 0,
-        total_lines: None,
-        page_lines: None,
-    }));
-    let doc_id = ui.add_child(root_id, DocumentWidget::new(doc, status.clone(), open_link));
+        percent: Cell::new(None),
+        search: placeholder_id.clone(),
+        doc_widget: placeholder_id.clone(),
+        focus: Cell::new(WidgetId::new()),
+        term_dims: Cell::new(Dimensions { width, height }),
+    });
+
+    let mut ui = Ui::new();
+    let root_id = ui.set_root(MainScreen { ctx: ctx.clone() });
+    let doc_id = ui.add_child(root_id, DocumentWidget::new(ctx.clone(), open_link));
+    ctx.doc_widget.set(doc_id);
+    ctx.focus.set(doc_id);
     ui.set_focus(doc_id);
-    ui.add_child(root_id, StatusLine { status });
+
+    ctx.search.set(ui.add_child(
+        root_id,
+        Search {
+            ctx: ctx.clone(),
+            search: String::new(),
+        },
+    ));
+    ui.add_child(root_id, StatusLine { ctx: ctx.clone() });
 
     // Send a resize event through to get us to do an initial layout
     ui.queue_event(WidgetEvent::Input(InputEvent::Resized {
@@ -444,7 +691,7 @@ fn create_ui<'a>(
         rows: height,
     }));
     ui.process_event_queue()?;
-    Ok(ui)
+    Ok((ui, ctx))
 }
 
 fn main() -> Result<(), Error> {
@@ -455,7 +702,7 @@ fn main() -> Result<(), Error> {
     term.terminal().enter_alternate_screen()?;
     let size = term.terminal().get_screen_size()?;
 
-    let mut ui = create_ui(
+    let (ui, ctx) = create_ui(
         Box::new(stdin()),
         "stdin".to_string(),
         size.cols,
@@ -466,54 +713,7 @@ fn main() -> Result<(), Error> {
         }),
     )?;
 
-    loop {
-        ui.process_event_queue()?;
-
-        // After updating and processing all of the widgets, compose them
-        // and render them to the screen.
-        if ui.render_to_screen(&mut term)? {
-            // We have more events to process immediately; don't block waiting
-            // for input below, but jump to the top of the loop to re-run the
-            // updates.
-            continue;
-        }
-        // Compute an optimized delta to apply to the terminal and display it
-        term.flush()?;
-
-        // Wait for user input
-        match term.terminal().poll_input(None) {
-            Ok(Some(input)) => match input {
-                InputEvent::Resized { rows, cols } => {
-                    // FIXME: this is working around a bug where we don't realize
-                    // that we should redraw everything on resize in BufferedTerminal.
-                    term.add_change(Change::ClearScreen(Default::default()));
-                    term.resize(cols, rows);
-                    ui.queue_event(WidgetEvent::Input(input));
-                }
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Escape,
-                    ..
-                })
-                | InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('q'),
-                    ..
-                }) => {
-                    // Quit the app when escape or q is pressed
-                    break;
-                }
-                _ => {
-                    // Feed input into the Ui
-                    ui.queue_event(WidgetEvent::Input(input));
-                }
-            },
-            Ok(None) => {}
-            Err(e) => {
-                print!("{:?}\r\n", e);
-                break;
-            }
-        }
-    }
-
+    Ate { ctx, term, ui }.run()?;
     Ok(())
 }
 
@@ -534,7 +734,7 @@ mod tests {
     fn create_test_ui(input: &str, width: usize, height: usize) -> Context {
         let visited = Rc::new(RefCell::new(vec![]));
         let ctx_visited = visited.clone();
-        let mut ui = create_ui(
+        let (mut ui, _) = create_ui(
             Box::new(Cursor::new(input.to_string())),
             "tst".to_string(),
             width,
