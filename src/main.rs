@@ -1,8 +1,8 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::cmp::{max, min};
 use std::io::{stdin, Read};
 use std::process::Command;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use crate::doc::Document;
 use termwiz::caps::Capabilities;
@@ -34,14 +34,14 @@ struct Dimensions {
     height: usize,
 }
 
-struct DocumentWidget<'a> {
-    ctx: RefCtx,
-    open_link: Box<dyn FnMut(&str) + 'a>,
-    last_render_size: Option<Dimensions>,
-    // The last link we opened
-    link_idx: Option<usize>,
-    // Cache of doc.text flown at the last_render_size. Will be cleared if the size changes.
-    lines: Vec<Line>,
+#[derive(Clone)]
+// This data should really belongs to DocumentWidget
+// It's weird for something external to it to be concerned with its height
+// I can't access DocumentWidget since Ui owns it,
+// so I've externalized the view info to make it accessible for status and search highlights and so on
+// TODO: see if WidgetId can be made generic on a widget type to allow access by a particular widget
+// type by a type specialized id
+struct DocumentView {
     // Reverses the reverse display of bytes in these ranges.
     // If reverse is off for a byte, flips it on and vice versa.
     highlights: Vec<(usize, usize)>,
@@ -50,25 +50,67 @@ struct DocumentWidget<'a> {
     // In reflow, the start_byte of this line is kept in the first_displayed_line of the reflowed
     // lines
     line: usize,
-    // Total lines to display if the length of the file is known
-    total_lines: Option<usize>,
-    // Lines shown in a single page
-    page_lines: Option<usize>,
+    total_lines: usize,
+    page_height: usize,
 }
 
-impl<'a> DocumentWidget<'a> {
-    fn new(ctx: RefCtx, open_link: Box<dyn FnMut(&str) + 'a>) -> DocumentWidget<'a> {
-        DocumentWidget {
-            open_link,
-            ctx,
-            line: 0,
-            total_lines: None,
-            page_lines: None,
-            last_render_size: None,
-            link_idx: None,
-            lines: vec![],
-            highlights: vec![],
+impl DocumentView {
+    fn backward(&mut self, lines: usize) {
+        self.line = self.line.saturating_sub(lines);
+    }
+
+    fn forward(&mut self, lines: usize) {
+        self.line = min(
+            self.total_lines.saturating_sub(self.page_height),
+            self.line + max(1, lines),
+        );
+    }
+
+    fn set_line(&mut self, line: usize) {
+        self.line = line;
+    }
+
+    fn percent(&self) -> Option<u8> {
+        if self.line == 0 {
+            return Some(0);
         }
+        let total_lines = self.total_lines;
+        let final_page_line = total_lines - self.page_height;
+        if final_page_line == self.line {
+            Some(100)
+        } else {
+            let percent = (self.line as f64 / (final_page_line as f64)) * 100.0;
+            Some(percent.floor() as u8)
+        }
+    }
+}
+
+struct DocumentFlow<'a> {
+    ctx: Weak<Ctx<'a>>,
+    width: usize,
+    // Cache of doc.text flown at the last_render_size. Will be cleared if the size changes.
+    // We cache the start point of the line so that when we go backwards, we can rerender without
+    // having to start from the start of the document to find where long lines break.
+    lines: Vec<Line>,
+}
+
+impl<'a> DocumentFlow<'a> {
+    fn new(width: usize) -> DocumentFlow<'a> {
+        DocumentFlow {
+            width,
+            ctx: Weak::new(),
+            lines: vec![],
+        }
+    }
+
+    fn set_width(&mut self, width: usize) -> bool {
+        if width == self.width {
+            return false;
+        }
+        // TODO - update ctx.view.line to keep current view position
+        self.width = width;
+        self.flow();
+        true
     }
 
     fn apply(attributes: &mut CellAttributes, a: &AttributeChange) {
@@ -107,11 +149,19 @@ impl<'a> DocumentWidget<'a> {
         };
     }
 
+    fn ctx(&self) -> Rc<Ctx<'a>> {
+        self.ctx
+            .upgrade()
+            .expect("Ctx shouldn't go away since it owns flow")
+    }
+
     fn flow(&mut self) {
+        // TODO - Only flow the lines necessary to render the screen.
+        // Read from the underlying stream if at the point of flowing.
         self.lines.clear();
 
-        let doc = &self.ctx.doc;
-        let width = self.width();
+        let doc = &self.ctx().doc;
+        let width = self.width;
         let mut byte = 0;
         use unicode_segmentation::UnicodeSegmentation;
         let graphemes = doc
@@ -150,9 +200,16 @@ impl<'a> DocumentWidget<'a> {
             }
             byte += grapheme.len();
         }
-        self.total_lines = Some(self.lines.len())
+        self.ctx().view.borrow_mut().total_lines = self.lines.len();
     }
+}
 
+struct DocumentWidget<'a> {
+    ctx: RefCtx<'a>,
+    last_render_size: Option<Dimensions>,
+}
+
+impl<'a> DocumentWidget<'a> {
     fn width(&self) -> usize {
         self.last_render_size
             .expect("Must render before accessing width")
@@ -165,89 +222,34 @@ impl<'a> DocumentWidget<'a> {
             .height
     }
 
-    fn backward(&mut self, lines: usize) {
-        self.set_line(self.line.saturating_sub(lines));
-    }
-
-    fn forward(&mut self, lines: usize) {
-        self.set_line(min(
-            self.lines.len().saturating_sub(self.height()),
-            self.line + max(1, lines),
-        ));
-    }
-
-    fn set_line(&mut self, line: usize) {
-        self.line = line;
-        self.ctx.percent.set(self.percent());
-    }
-
-    fn percent(&self) -> Option<u8> {
-        if self.line == 0 {
-            return Some(0);
-        }
-        let total_lines = match self.total_lines {
-            None => {
-                return None;
-            }
-            Some(tl) => tl,
-        };
-        let final_page_line = total_lines - self.page_lines.unwrap_or(0);
-        if final_page_line == self.line {
-            Some(100)
-        } else {
-            let percent = (self.line as f64 / (final_page_line as f64)) * 100.0;
-            Some(percent.floor() as u8)
-        }
-    }
-
     fn process_key(&mut self, event: &KeyEvent) -> bool {
         match event {
             KeyEvent {
                 key: KeyCode::UpArrow,
                 ..
             } => {
-                self.backward(1);
+                self.ctx.view.borrow_mut().backward(1);
                 true
             }
             KeyEvent {
                 key: KeyCode::DownArrow,
                 ..
             } => {
-                self.forward(1);
+                self.ctx.view.borrow_mut().forward(1);
                 true
             }
             KeyEvent {
                 key: KeyCode::Char(' '),
                 ..
             } => {
-                self.forward(self.height() - 2);
+                self.ctx.view.borrow_mut().forward(self.height() - 2);
                 true
             }
             KeyEvent {
                 key: KeyCode::Char('b'),
                 ..
             } => {
-                self.backward(self.height() - 2);
-                true
-            }
-            KeyEvent {
-                key: KeyCode::Char('n'),
-                ..
-            } => {
-                if self.ctx.doc.links.len() == 0 {
-                    return true;
-                }
-                let link_idx = self.link_idx.unwrap_or(0);
-                let x = &self.ctx.doc.links[link_idx];
-                self.highlights = vec![(x.start, x.end)];
-                self.link_idx = Some(link_idx + 1);
-                (self.open_link)(x.link.uri());
-                for (idx, line) in self.lines.iter().enumerate() {
-                    if line.start_byte > x.start {
-                        self.set_line(idx.saturating_sub(1));
-                        break;
-                    }
-                }
+                self.ctx.view.borrow_mut().backward(self.height() - 2);
                 true
             }
             KeyEvent { .. } => false,
@@ -262,16 +264,12 @@ impl<'a> Widget for DocumentWidget<'a> {
         assert!(height > 0);
         self.last_render_size = Some(Dimensions { width, height });
 
-        if self.lines.len() == 0 {
-            // TODO - Only flow the lines necessary to render this screen.
-            // Read from the underlying stream if at the point of flowing.
-            self.flow();
-        }
-        self.page_lines = Some(height);
-        self.ctx.percent.set(self.percent());
+        self.ctx.flow.borrow_mut().set_width(width);
+        self.ctx.view.borrow_mut().page_height = height;
 
-        let mut line = self.line;
-        let first_line = &self.lines[line];
+        let mut line = self.ctx.view.borrow().line;
+        let lines = &self.ctx.flow.borrow().lines;
+        let first_line = &lines[line];
         let mut changes = vec![
             Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
@@ -289,14 +287,15 @@ impl<'a> Widget for DocumentWidget<'a> {
             .graphemes(true)
             .map(|g| (g, grapheme_column_width(g, None)));
         let mut attr_idx = doc.attrs.partition_point(|(b, _)| *b < byte);
-        let mut highlight_idx = self.highlights.partition_point(|(_, e)| *e <= byte);
+        let highlights = &self.ctx.view.borrow().highlights;
+        let mut highlight_idx = highlights.partition_point(|(_, e)| *e <= byte);
         let mut highlight: Option<(usize, usize)> = None;
         // Tracks the inverse sgr state for byte.
         // We switch it when in a highlight and then go back to the set state when exiting
         // the highlight
         let mut reversed = first_line.start_attributes.reverse();
         let mut cells_in_line = 0;
-        let last_displayed_line = min(self.lines.len(), line + height) - 1;
+        let last_displayed_line = min(lines.len(), line + height) - 1;
         for (grapheme, cells) in graphemes {
             if cells_in_line + cells > width || grapheme == "\n" {
                 if line == last_displayed_line {
@@ -313,10 +312,8 @@ impl<'a> Widget for DocumentWidget<'a> {
                         changes.push(Change::Attribute(AttributeChange::Reverse(reversed)));
                         highlight_idx += 1;
                     }
-                } else if highlight_idx < self.highlights.len()
-                    && self.highlights[highlight_idx].0 <= byte
-                {
-                    highlight = Some(self.highlights[highlight_idx]);
+                } else if highlight_idx < highlights.len() && highlights[highlight_idx].0 <= byte {
+                    highlight = Some(highlights[highlight_idx]);
                     changes.push(Change::Attribute(AttributeChange::Reverse(!reversed)));
                 }
                 while attr_idx < doc.attrs.len() && byte >= doc.attrs[attr_idx].0 {
@@ -329,7 +326,7 @@ impl<'a> Widget for DocumentWidget<'a> {
                         }
                     }
                     if let Change::AllAttributes(attr) = &mut change {
-                        reversed = false;
+                        reversed = attr.reverse();
                         if highlight.is_some() {
                             attr.set_reverse(!attr.reverse());
                         }
@@ -361,11 +358,11 @@ impl<'a> Widget for DocumentWidget<'a> {
 }
 
 // This is a little status line widget that we render at the bottom
-struct StatusLine {
-    ctx: RefCtx,
+struct StatusLine<'a> {
+    ctx: RefCtx<'a>,
 }
 
-impl Widget for StatusLine {
+impl<'a> Widget for StatusLine<'a> {
     fn render(&mut self, args: &mut RenderArgs) {
         args.surface
             .add_change(Change::ClearScreen(AnsiColor::Grey.into()));
@@ -376,7 +373,7 @@ impl Widget for StatusLine {
         let doc_name = &self.ctx.doc_name;
         let doc_name_width = unicode_column_width(&doc_name, None);
         args.surface.add_change(Change::Text(doc_name.to_string()));
-        let progress = match self.ctx.percent.get() {
+        let progress = match self.ctx.view.borrow().percent() {
             Some(p) => format!("{}%", p),
             None => "?%".to_string(),
         };
@@ -399,19 +396,67 @@ impl Widget for StatusLine {
     }
 }
 
-struct Search {
-    ctx: RefCtx,
+struct Search<'a> {
+    ctx: Weak<Ctx<'a>>,
     search: String,
+    selected_idx: usize,
+    open_link: Box<dyn FnMut(&str) + 'a>,
 }
 
-impl Search {
+impl<'a> Search<'a> {
+    fn new(open_link: Box<dyn FnMut(&str) + 'a>) -> Search<'a> {
+        Search {
+            open_link,
+            ctx: Weak::new(),
+            search: String::new(),
+            selected_idx: 0,
+        }
+    }
+
+    fn ctx(&self) -> Rc<Ctx<'a>> {
+        self.ctx
+            .upgrade()
+            .expect("Ctx shouldn't go away since it owns flow")
+    }
+
+    fn activate(&mut self) {
+        self.set_selected_idx(self.selected_idx);
+    }
+
+    fn set_selected_idx(&mut self, selected_idx: usize) {
+        if selected_idx >= self.ctx().doc.links.len() {
+            return;
+        }
+        self.selected_idx = selected_idx;
+        let link = &self.ctx().doc.links[selected_idx];
+        self.ctx().highlight(link.start, link.end);
+    }
+
+    fn open_selected(&mut self) {
+        if self.selected_idx >= self.ctx().doc.links.len() {
+            return;
+        }
+        self.set_selected_idx(self.selected_idx);
+        let link = &self.ctx().doc.links[self.selected_idx];
+        let addr = link.link.uri();
+        (self.open_link)(addr);
+    }
+
+    fn select_next(&mut self) {
+        self.set_selected_idx(self.selected_idx + 1);
+    }
+
+    fn select_prev(&mut self) {
+        self.set_selected_idx(self.selected_idx.saturating_sub(1));
+    }
+
     fn process_key(&mut self, event: &KeyEvent) -> bool {
         match event {
             KeyEvent {
-                key: KeyCode::Char('/'),
+                key: KeyCode::Enter,
                 ..
             } => {
-                self.ctx.deactivate_search();
+                self.ctx().deactivate_search();
                 true
             }
             KeyEvent {
@@ -429,15 +474,42 @@ impl Search {
                 true
             }
             KeyEvent {
+                key: KeyCode::UpArrow,
+                ..
+            } => {
+                self.select_prev();
+                true
+            }
+            KeyEvent {
                 key: KeyCode::DownArrow,
                 ..
-            } => true,
+            } => {
+                self.select_next();
+                true
+            }
             _ => false,
+        }
+    }
+
+    fn render(&mut self, _width: usize, height: usize, changes: &mut Vec<Change>) {
+        let first_visible_idx = self.selected_idx.saturating_sub(height);
+        for i in first_visible_idx..(first_visible_idx + height) {
+            changes.push(Change::Attribute(AttributeChange::Reverse(
+                i == self.selected_idx,
+            )));
+            changes.push(Change::Text(format!(
+                "{}\r\n",
+                self.ctx().doc.links[i].link.uri()
+            )));
         }
     }
 }
 
-impl Widget for Search {
+struct SearchWidget<'a> {
+    ctx: RefCtx<'a>,
+}
+
+impl<'a> Widget for SearchWidget<'a> {
     fn render(&mut self, args: &mut RenderArgs) {
         let (width, height) = args.surface.dimensions();
         if height == 0 {
@@ -449,12 +521,13 @@ impl Widget for Search {
                 x: Absolute(0),
                 y: Absolute(0),
             },
-            Change::Text("-".repeat(width)),
+            Change::Text(format!("{}\r\n", "-".repeat(width))),
         ];
-        for link in &self.ctx.doc.links[..height - 2] {
-            changes.push(Change::Text(format!("{}\r\n", link.link.uri())));
-        }
-        let search_label = format!("Search: {}", self.search);
+        self.ctx
+            .search
+            .borrow_mut()
+            .render(width, height - 2, &mut changes);
+        let search_label = format!("Search: {}", self.ctx.search.borrow().search);
         args.cursor.coords = ParentRelativeCoords {
             x: search_label.len(),
             y: height - 1,
@@ -479,9 +552,9 @@ impl Widget for Search {
     fn process_event(&mut self, event: &WidgetEvent, _args: &mut UpdateArgs) -> bool {
         match event {
             WidgetEvent::Input(i) => match i {
-                InputEvent::Key(k) => self.process_key(k),
+                InputEvent::Key(k) => self.ctx.search.borrow_mut().process_key(k),
                 InputEvent::Paste(s) => {
-                    self.search.push_str(&s);
+                    self.ctx.search.borrow_mut().search.push_str(&s);
                     true
                 }
                 _ => false,
@@ -491,11 +564,11 @@ impl Widget for Search {
 }
 
 /// This is the main container widget for the app
-struct MainScreen {
-    ctx: RefCtx,
+struct MainScreen<'a> {
+    ctx: RefCtx<'a>,
 }
 
-impl MainScreen {
+impl<'a> MainScreen<'a> {
     fn process_key(&mut self, event: &KeyEvent) -> bool {
         match event {
             KeyEvent {
@@ -505,12 +578,33 @@ impl MainScreen {
                 self.ctx.activate_search();
                 true
             }
+            KeyEvent {
+                key: KeyCode::Char('N'),
+                ..
+            } => {
+                self.ctx.search.borrow_mut().select_prev();
+                true
+            }
+            KeyEvent {
+                key: KeyCode::Char('n'),
+                ..
+            } => {
+                self.ctx.search.borrow_mut().select_next();
+                true
+            }
+            KeyEvent {
+                key: KeyCode::Enter,
+                ..
+            } => {
+                self.ctx.search.borrow_mut().open_selected();
+                true
+            }
             _ => false,
         }
     }
 }
 
-impl Widget for MainScreen {
+impl<'a> Widget for MainScreen<'a> {
     fn render(&mut self, _args: &mut RenderArgs) {}
 
     fn get_size_constraints(&self) -> Constraints {
@@ -530,24 +624,37 @@ impl Widget for MainScreen {
     }
 }
 
-struct Ctx {
+struct Ctx<'a> {
     doc: Document,
     doc_name: String,
-    search: Cell<WidgetId>,
+    search_id: Cell<WidgetId>,
     doc_widget: Cell<WidgetId>,
+    flow: RefCell<DocumentFlow<'a>>,
+    view: RefCell<DocumentView>,
+    search: RefCell<Search<'a>>,
 
-    percent: Cell<Option<u8>>,
     focus: Cell<WidgetId>,
     term_dims: Cell<Dimensions>,
 }
 
-impl Ctx {
+impl<'a> Ctx<'a> {
+    fn highlight(&self, start: usize, end: usize) {
+        self.view.borrow_mut().highlights = vec![(start, end)];
+        for (idx, line) in self.flow.borrow().lines.iter().enumerate() {
+            if line.start_byte > start {
+                self.view.borrow_mut().set_line(idx.saturating_sub(1));
+                break;
+            }
+        }
+    }
+
     fn search_visible(&self) -> bool {
-        self.focus.get() == self.search.get()
+        self.focus.get() == self.search_id.get()
     }
 
     fn activate_search(&self) {
-        self.focus.set(self.search.get());
+        self.focus.set(self.search_id.get());
+        self.search.borrow_mut().activate();
     }
 
     fn deactivate_search(&self) {
@@ -579,10 +686,10 @@ impl Ctx {
     }
 }
 
-type RefCtx = Rc<Ctx>;
+type RefCtx<'a> = Rc<Ctx<'a>>;
 
 struct Ate<'a, T: Terminal> {
-    ctx: RefCtx,
+    ctx: RefCtx<'a>,
     term: BufferedTerminal<T>,
     ui: Ui<'a>,
 }
@@ -625,14 +732,10 @@ impl<'a, T: Terminal> Ate<'a, T> {
                         self.ui.queue_event(WidgetEvent::Input(input));
                     }
                     InputEvent::Key(KeyEvent {
-                        key: KeyCode::Escape,
-                        ..
-                    })
-                    | InputEvent::Key(KeyEvent {
                         key: KeyCode::Char('q'),
                         ..
                     }) => {
-                        // Quit the app when escape or q is pressed
+                        // Quit the app when q is pressed
                         break;
                     }
                     _ => {
@@ -656,33 +759,44 @@ fn create_ui<'a>(
     width: usize,
     height: usize,
     open_link: Box<dyn FnMut(&str) + 'a>,
-) -> Result<(Ui<'a>, RefCtx), Error> {
+) -> Result<(Ui<'a>, RefCtx<'a>), Error> {
     let doc = Document::new(input)?;
     let placeholder_id = Cell::new(WidgetId::new());
     let ctx = Rc::new(Ctx {
         doc,
         doc_name,
-        percent: Cell::new(None),
-        search: placeholder_id.clone(),
+        search_id: placeholder_id.clone(),
         doc_widget: placeholder_id.clone(),
         focus: Cell::new(WidgetId::new()),
         term_dims: Cell::new(Dimensions { width, height }),
+        view: RefCell::new(DocumentView {
+            highlights: vec![],
+            line: 0,
+            page_height: 0,
+            total_lines: 0,
+        }),
+        flow: RefCell::new(DocumentFlow::new(width)),
+        search: RefCell::new(Search::new(open_link)),
     });
+    ctx.flow.borrow_mut().ctx = Rc::downgrade(&ctx);
+    ctx.flow.borrow_mut().flow();
+    ctx.search.borrow_mut().ctx = Rc::downgrade(&ctx);
 
     let mut ui = Ui::new();
     let root_id = ui.set_root(MainScreen { ctx: ctx.clone() });
-    let doc_id = ui.add_child(root_id, DocumentWidget::new(ctx.clone(), open_link));
+    let doc_id = ui.add_child(
+        root_id,
+        DocumentWidget {
+            ctx: ctx.clone(),
+            last_render_size: None,
+        },
+    );
     ctx.doc_widget.set(doc_id);
     ctx.focus.set(doc_id);
     ui.set_focus(doc_id);
 
-    ctx.search.set(ui.add_child(
-        root_id,
-        Search {
-            ctx: ctx.clone(),
-            search: String::new(),
-        },
-    ));
+    ctx.search_id
+        .set(ui.add_child(root_id, SearchWidget { ctx: ctx.clone() }));
     ui.add_child(root_id, StatusLine { ctx: ctx.clone() });
 
     // Send a resize event through to get us to do an initial layout
@@ -816,7 +930,12 @@ mod tests {
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("B", cells[0].str());
         assert_eq!(0, ctx.visited.borrow().len());
-        ctx.ui.queue_event(press_char_event('n'));
+
+        ctx.ui
+            .queue_event(WidgetEvent::Input(InputEvent::Key(KeyEvent {
+                key: KeyCode::Enter,
+                modifiers: Modifiers::NONE,
+            })));
         ctx.ui.process_event_queue().unwrap();
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         let cells = &ctx.surface.screen_cells()[0];
