@@ -5,6 +5,7 @@ use std::process::Command;
 use std::rc::{Rc, Weak};
 
 use crate::doc::Document;
+use doc::LinkRange;
 use termwiz::caps::Capabilities;
 use termwiz::cell::{grapheme_column_width, unicode_column_width, AttributeChange, CellAttributes};
 use termwiz::color::{AnsiColor, ColorAttribute};
@@ -396,6 +397,7 @@ struct Search<'a> {
     selected_idx: usize,
     open_link: Box<dyn FnMut(&str) + 'a>,
     view_at_activation: Option<DocumentView>,
+    matches: Vec<LinkRange>,
 }
 
 impl<'a> Search<'a> {
@@ -406,7 +408,13 @@ impl<'a> Search<'a> {
             search: String::new(),
             selected_idx: 0,
             view_at_activation: None,
+            matches: vec![],
         }
+    }
+
+    fn set_ctx(&mut self, ctx: &Rc<Ctx<'a>>) {
+        self.ctx = Rc::downgrade(ctx);
+        self.matches = self.ctx().doc.links.to_vec();
     }
 
     fn ctx(&self) -> Rc<Ctx<'a>> {
@@ -421,20 +429,20 @@ impl<'a> Search<'a> {
     }
 
     fn set_selected_idx(&mut self, selected_idx: usize) {
-        if selected_idx >= self.ctx().doc.links.len() {
+        if selected_idx >= self.matches.len() {
             return;
         }
         self.selected_idx = selected_idx;
-        let link = &self.ctx().doc.links[selected_idx];
+        let link = &self.matches[selected_idx];
         self.ctx().highlight(link.start, link.end);
     }
 
     fn open_selected(&mut self) {
-        if self.selected_idx >= self.ctx().doc.links.len() {
+        if self.selected_idx >= self.matches.len() {
             return;
         }
         self.set_selected_idx(self.selected_idx);
-        let link = &self.ctx().doc.links[self.selected_idx];
+        let link = &self.matches[self.selected_idx];
         let addr = link.link.uri();
         (self.open_link)(addr);
     }
@@ -471,6 +479,13 @@ impl<'a> Search<'a> {
                 ..
             } => {
                 self.search.push(*c);
+                self.matches.retain(|i| i.link.uri().contains(&self.search));
+                // TODO - maintain the selected item if it's still in the list or go to the closest remaining
+                if self.matches.len() == 0 {
+                    self.selected_idx = 0;
+                } else if self.matches.len() <= self.selected_idx {
+                    self.set_selected_idx(self.matches.len() - 1);
+                }
                 true
             }
             KeyEvent {
@@ -478,6 +493,8 @@ impl<'a> Search<'a> {
                 ..
             } => {
                 self.search.pop();
+                self.matches = self.ctx().doc.links.to_vec();
+                self.matches.retain(|i| i.link.uri().contains(&self.search));
                 true
             }
             KeyEvent {
@@ -501,13 +518,13 @@ impl<'a> Search<'a> {
     fn render(&mut self, _width: usize, height: usize, changes: &mut Vec<Change>) {
         let first_visible_idx = self.selected_idx.saturating_sub(height);
         for i in first_visible_idx..(first_visible_idx + height) {
+            if i >= self.matches.len() {
+                break;
+            }
             changes.push(Change::Attribute(AttributeChange::Reverse(
                 i == self.selected_idx,
             )));
-            changes.push(Change::Text(format!(
-                "{}\r\n",
-                self.ctx().doc.links[i].link.uri()
-            )));
+            changes.push(Change::Text(format!("{}\r\n", self.matches[i].link.uri())));
         }
     }
 }
@@ -787,7 +804,7 @@ fn create_ui<'a>(
     });
     ctx.flow.borrow_mut().ctx = Rc::downgrade(&ctx);
     ctx.flow.borrow_mut().flow();
-    ctx.search.borrow_mut().ctx = Rc::downgrade(&ctx);
+    ctx.search.borrow_mut().set_ctx(&ctx);
 
     let mut ui = Ui::new();
     let root_id = ui.set_root(MainScreen { ctx: ctx.clone() });

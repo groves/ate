@@ -10,6 +10,7 @@ use termwiz::hyperlink::Hyperlink;
 use termwiz::surface::Change;
 use termwiz::Error;
 
+#[derive(Clone)]
 pub(crate) struct LinkRange {
     pub start: usize,
     pub end: usize,
