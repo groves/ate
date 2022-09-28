@@ -35,12 +35,6 @@ struct Dimensions {
 }
 
 #[derive(Clone)]
-// This data should really belongs to DocumentWidget
-// It's weird for something external to it to be concerned with its height
-// I can't access DocumentWidget since Ui owns it,
-// so I've externalized the view info to make it accessible for status and search highlights and so on
-// TODO: see if WidgetId can be made generic on a widget type to allow access by a particular widget
-// type by a type specialized id
 struct DocumentView {
     // Reverses the reverse display of bytes in these ranges.
     // If reverse is off for a byte, flips it on and vice versa.
@@ -401,6 +395,7 @@ struct Search<'a> {
     search: String,
     selected_idx: usize,
     open_link: Box<dyn FnMut(&str) + 'a>,
+    view_at_activation: Option<DocumentView>,
 }
 
 impl<'a> Search<'a> {
@@ -410,6 +405,7 @@ impl<'a> Search<'a> {
             ctx: Weak::new(),
             search: String::new(),
             selected_idx: 0,
+            view_at_activation: None,
         }
     }
 
@@ -420,6 +416,7 @@ impl<'a> Search<'a> {
     }
 
     fn activate(&mut self) {
+        self.view_at_activation = Some(self.ctx().view.borrow().clone());
         self.set_selected_idx(self.selected_idx);
     }
 
@@ -457,6 +454,16 @@ impl<'a> Search<'a> {
                 ..
             } => {
                 self.ctx().deactivate_search();
+                true
+            }
+            KeyEvent {
+                key: KeyCode::Escape,
+                ..
+            } => {
+                self.ctx().deactivate_search();
+                self.ctx()
+                    .view
+                    .replace(self.view_at_activation.take().unwrap());
                 true
             }
             KeyEvent {
