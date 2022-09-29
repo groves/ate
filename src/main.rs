@@ -394,10 +394,11 @@ impl<'a> Widget for StatusLine<'a> {
 struct Search<'a> {
     ctx: Weak<Ctx<'a>>,
     search: String,
-    selected_idx: usize,
+    selected_idx: Option<usize>,
     open_link: Box<dyn FnMut(&str) + 'a>,
     view_at_activation: Option<DocumentView>,
-    matches: Vec<LinkRange>,
+    matches: Vec<usize>,
+    links: Vec<LinkRange>,
 }
 
 impl<'a> Search<'a> {
@@ -406,15 +407,17 @@ impl<'a> Search<'a> {
             open_link,
             ctx: Weak::new(),
             search: String::new(),
-            selected_idx: 0,
+            selected_idx: None,
             view_at_activation: None,
             matches: vec![],
+            links: vec![],
         }
     }
 
     fn set_ctx(&mut self, ctx: &Rc<Ctx<'a>>) {
         self.ctx = Rc::downgrade(ctx);
-        self.matches = self.ctx().doc.links.to_vec();
+        self.links = self.ctx().doc.links.to_vec();
+        self.matches = self.links.iter().enumerate().map(|(i, _)| i).collect();
     }
 
     fn ctx(&self) -> Rc<Ctx<'a>> {
@@ -425,34 +428,70 @@ impl<'a> Search<'a> {
 
     fn activate(&mut self) {
         self.view_at_activation = Some(self.ctx().view.borrow().clone());
-        self.set_selected_idx(self.selected_idx);
+        self.set_selected_idx(self.selected_idx.unwrap_or(0));
     }
 
     fn set_selected_idx(&mut self, selected_idx: usize) {
         if selected_idx >= self.matches.len() {
             return;
         }
-        self.selected_idx = selected_idx;
-        let link = &self.matches[selected_idx];
+        self.selected_idx = Some(selected_idx);
+        let link = &self.links[self.matches[selected_idx]];
         self.ctx().highlight(link.start, link.end);
     }
 
     fn open_selected(&mut self) {
-        if self.selected_idx >= self.matches.len() {
+        if self.matches.len() == 0 {
             return;
         }
-        self.set_selected_idx(self.selected_idx);
-        let link = &self.matches[self.selected_idx];
+        let selected_idx = match self.selected_idx {
+            Some(idx) => idx,
+            None => {
+                self.set_selected_idx(0);
+                0
+            }
+        };
+        let link = &self.links[self.matches[selected_idx]];
         let addr = link.link.uri();
         (self.open_link)(addr);
     }
 
     fn select_next(&mut self) {
-        self.set_selected_idx(self.selected_idx + 1);
+        self.set_selected_idx(if let Some(idx) = self.selected_idx {
+            idx + 1
+        } else {
+            0
+        });
     }
 
     fn select_prev(&mut self) {
-        self.set_selected_idx(self.selected_idx.saturating_sub(1));
+        self.set_selected_idx(if let Some(idx) = self.selected_idx {
+            idx.saturating_sub(1)
+        } else {
+            0
+        });
+    }
+
+    fn update_matches(&mut self) {
+        let previous_link_idx = if self.matches.len() > 0 {
+            self.matches[self.selected_idx.unwrap_or(0)]
+        } else {
+            0
+        };
+        self.matches = self
+            .links
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.link.uri().contains(&self.search))
+            .map(|(i, _)| i)
+            .collect();
+        let mut new_selected_idx = self
+            .matches
+            .partition_point(|link_idx| link_idx < &previous_link_idx);
+        if new_selected_idx == self.matches.len() {
+            new_selected_idx = self.matches.len().saturating_sub(1);
+        }
+        self.selected_idx = Some(new_selected_idx);
     }
 
     fn process_key(&mut self, event: &KeyEvent) -> bool {
@@ -479,13 +518,7 @@ impl<'a> Search<'a> {
                 ..
             } => {
                 self.search.push(*c);
-                self.matches.retain(|i| i.link.uri().contains(&self.search));
-                // TODO - maintain the selected item if it's still in the list or go to the closest remaining
-                if self.matches.len() == 0 {
-                    self.selected_idx = 0;
-                } else if self.matches.len() <= self.selected_idx {
-                    self.set_selected_idx(self.matches.len() - 1);
-                }
+                self.update_matches();
                 true
             }
             KeyEvent {
@@ -493,8 +526,7 @@ impl<'a> Search<'a> {
                 ..
             } => {
                 self.search.pop();
-                self.matches = self.ctx().doc.links.to_vec();
-                self.matches.retain(|i| i.link.uri().contains(&self.search));
+                self.update_matches();
                 true
             }
             KeyEvent {
@@ -516,15 +548,19 @@ impl<'a> Search<'a> {
     }
 
     fn render(&mut self, _width: usize, height: usize, changes: &mut Vec<Change>) {
-        let first_visible_idx = self.selected_idx.saturating_sub(height);
+        let selected_idx = self.selected_idx.unwrap_or(0);
+        let first_visible_idx = selected_idx.saturating_sub(height);
         for i in first_visible_idx..(first_visible_idx + height) {
             if i >= self.matches.len() {
                 break;
             }
             changes.push(Change::Attribute(AttributeChange::Reverse(
-                i == self.selected_idx,
+                i == selected_idx,
             )));
-            changes.push(Change::Text(format!("{}\r\n", self.matches[i].link.uri())));
+            changes.push(Change::Text(format!(
+                "{}\r\n",
+                self.links[self.matches[i]].link.uri()
+            )));
         }
     }
 }
