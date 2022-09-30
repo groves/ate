@@ -29,12 +29,6 @@ struct Line {
     start_attributes: CellAttributes,
 }
 
-#[derive(Clone, Copy)]
-struct Dimensions {
-    width: usize,
-    height: usize,
-}
-
 #[derive(Clone)]
 struct DocumentView {
     // Reverses the reverse display of bytes in these ranges.
@@ -199,22 +193,82 @@ impl<'a> DocumentFlow<'a> {
     }
 }
 
+fn render_lines(
+    doc: &Document,
+    lines: &[Line],
+    mut byte: usize,
+    width: usize,
+    height: usize,
+    highlights: &[(usize, usize)],
+    changes: &mut Vec<Change>,
+) {
+    use unicode_segmentation::UnicodeSegmentation;
+    let graphemes = doc.text[byte..]
+        .graphemes(true)
+        .map(|g| (g, grapheme_column_width(g, None)));
+    let mut line = lines.partition_point(|l| l.start_byte < byte);
+    let mut attr_idx = doc.attrs.partition_point(|(b, _)| *b < byte);
+    let mut highlight_idx = highlights.partition_point(|(_, e)| *e <= byte);
+    let mut highlight: Option<(usize, usize)> = None;
+    // Tracks the inverse sgr state for byte.
+    // We switch it when in a highlight and then go back to the set state when exiting
+    // the highlight
+    let mut reversed = lines[line].start_attributes.reverse();
+    let mut cells_in_line = 0;
+    let last_displayed_line = min(lines.len(), line + height) - 1;
+    for (grapheme, cells) in graphemes {
+        if cells_in_line + cells > width || grapheme == "\n" {
+            if line == last_displayed_line {
+                break;
+            }
+            changes.push(Change::Text("\r\n".to_string()));
+            line += 1;
+            cells_in_line = 0;
+        }
+        if grapheme != "\n" {
+            if let Some(active_highlight) = highlight {
+                if active_highlight.1 <= byte {
+                    highlight = None;
+                    changes.push(Change::Attribute(AttributeChange::Reverse(reversed)));
+                    highlight_idx += 1;
+                }
+            } else if highlight_idx < highlights.len() && highlights[highlight_idx].0 <= byte {
+                highlight = Some(highlights[highlight_idx]);
+                changes.push(Change::Attribute(AttributeChange::Reverse(!reversed)));
+            }
+            while attr_idx < doc.attrs.len() && byte >= doc.attrs[attr_idx].0 {
+                let mut change = doc.attrs[attr_idx].1.clone();
+                attr_idx += 1;
+                if let Change::Attribute(AttributeChange::Reverse(new_reverse)) = change {
+                    reversed = new_reverse;
+                    if highlight.is_some() {
+                        change = Change::Attribute(AttributeChange::Reverse(!new_reverse));
+                    }
+                }
+                if let Change::AllAttributes(attr) = &mut change {
+                    reversed = attr.reverse();
+                    if highlight.is_some() {
+                        attr.set_reverse(!attr.reverse());
+                    }
+                }
+                changes.push(change);
+            }
+            changes.push(Change::Text(grapheme.to_string()));
+            cells_in_line += cells;
+        }
+        byte += grapheme.len();
+    }
+}
+
 struct DocumentWidget<'a> {
     ctx: RefCtx<'a>,
-    last_render_size: Option<Dimensions>,
+    last_render_height: Option<usize>,
 }
 
 impl<'a> DocumentWidget<'a> {
-    fn width(&self) -> usize {
-        self.last_render_size
-            .expect("Must render before accessing width")
-            .width
-    }
-
     fn height(&self) -> usize {
-        self.last_render_size
+        self.last_render_height
             .expect("Must render before accessing height")
-            .height
     }
 
     fn process_key(&mut self, event: &KeyEvent) -> bool {
@@ -257,14 +311,12 @@ impl<'a> Widget for DocumentWidget<'a> {
         let (width, height) = args.surface.dimensions();
         assert!(width > 0);
         assert!(height > 0);
-        self.last_render_size = Some(Dimensions { width, height });
+        self.last_render_height = Some(height);
 
         self.ctx.flow.borrow_mut().set_width(width);
         self.ctx.view.borrow_mut().page_height = height;
 
-        let mut line = self.ctx.view.borrow().line;
-        let lines = &self.ctx.flow.borrow().lines;
-        let first_line = &lines[line];
+        let first_line = &self.ctx.flow.borrow().lines[self.ctx.view.borrow().line];
         let mut changes = vec![
             Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
@@ -273,66 +325,23 @@ impl<'a> Widget for DocumentWidget<'a> {
             },
             Change::AllAttributes(first_line.start_attributes.clone()),
         ];
+        render_lines(
+            &self.ctx.doc,
+            &self.ctx.flow.borrow().lines,
+            first_line.start_byte,
+            width,
+            height,
+            &self.ctx.view.borrow().highlights,
+            &mut changes,
+        );
+        // TODO - add visibility setting to cursor in termwiz.
+        // This is the best I can do to make it less visible now.
+        // Changing the shape doesn't seem to work, either :(
+        args.cursor.coords = ParentRelativeCoords {
+            x: width + 1,
+            y: height - 1,
+        };
 
-        let width = self.width();
-        let mut byte = first_line.start_byte;
-        use unicode_segmentation::UnicodeSegmentation;
-        let doc = &self.ctx.doc;
-        let graphemes = doc.text[byte..]
-            .graphemes(true)
-            .map(|g| (g, grapheme_column_width(g, None)));
-        let mut attr_idx = doc.attrs.partition_point(|(b, _)| *b < byte);
-        let highlights = &self.ctx.view.borrow().highlights;
-        let mut highlight_idx = highlights.partition_point(|(_, e)| *e <= byte);
-        let mut highlight: Option<(usize, usize)> = None;
-        // Tracks the inverse sgr state for byte.
-        // We switch it when in a highlight and then go back to the set state when exiting
-        // the highlight
-        let mut reversed = first_line.start_attributes.reverse();
-        let mut cells_in_line = 0;
-        let last_displayed_line = min(lines.len(), line + height) - 1;
-        for (grapheme, cells) in graphemes {
-            if cells_in_line + cells > width || grapheme == "\n" {
-                if line == last_displayed_line {
-                    break;
-                }
-                changes.push(Change::Text("\r\n".to_string()));
-                line += 1;
-                cells_in_line = 0;
-            }
-            if grapheme != "\n" {
-                if let Some(active_highlight) = highlight {
-                    if active_highlight.1 <= byte {
-                        highlight = None;
-                        changes.push(Change::Attribute(AttributeChange::Reverse(reversed)));
-                        highlight_idx += 1;
-                    }
-                } else if highlight_idx < highlights.len() && highlights[highlight_idx].0 <= byte {
-                    highlight = Some(highlights[highlight_idx]);
-                    changes.push(Change::Attribute(AttributeChange::Reverse(!reversed)));
-                }
-                while attr_idx < doc.attrs.len() && byte >= doc.attrs[attr_idx].0 {
-                    let mut change = doc.attrs[attr_idx].1.clone();
-                    attr_idx += 1;
-                    if let Change::Attribute(AttributeChange::Reverse(new_reverse)) = change {
-                        reversed = new_reverse;
-                        if highlight.is_some() {
-                            change = Change::Attribute(AttributeChange::Reverse(!new_reverse));
-                        }
-                    }
-                    if let Change::AllAttributes(attr) = &mut change {
-                        reversed = attr.reverse();
-                        if highlight.is_some() {
-                            attr.set_reverse(!attr.reverse());
-                        }
-                    }
-                    changes.push(change);
-                }
-                changes.push(Change::Text(grapheme.to_string()));
-                cells_in_line += cells;
-            }
-            byte += grapheme.len();
-        }
         args.surface.add_changes(changes);
     }
 
@@ -482,7 +491,7 @@ impl<'a> Search<'a> {
             .links
             .iter()
             .enumerate()
-            .filter(|(_, l)| l.link.uri().contains(&self.search))
+            .filter(|(_, l)| self.ctx().doc.text[l.start..l.end].contains(&self.search))
             .map(|(i, _)| i)
             .collect();
         let mut new_selected_idx = self
@@ -491,7 +500,7 @@ impl<'a> Search<'a> {
         if new_selected_idx == self.matches.len() {
             new_selected_idx = self.matches.len().saturating_sub(1);
         }
-        self.selected_idx = Some(new_selected_idx);
+        self.set_selected_idx(new_selected_idx);
     }
 
     fn process_key(&mut self, event: &KeyEvent) -> bool {
@@ -547,9 +556,14 @@ impl<'a> Search<'a> {
         }
     }
 
-    fn render(&mut self, _width: usize, height: usize, changes: &mut Vec<Change>) {
+    fn render(&mut self, width: usize, height: usize, changes: &mut Vec<Change>) {
+        if self.matches.len() == 0 {
+            return;
+        }
         let selected_idx = self.selected_idx.unwrap_or(0);
         let first_visible_idx = selected_idx.saturating_sub(height);
+        let selected = &self.links[self.matches[selected_idx]];
+        let highlights = vec![(selected.start, selected.end)];
         for i in first_visible_idx..(first_visible_idx + height) {
             if i >= self.matches.len() {
                 break;
@@ -557,10 +571,16 @@ impl<'a> Search<'a> {
             changes.push(Change::Attribute(AttributeChange::Reverse(
                 i == selected_idx,
             )));
-            changes.push(Change::Text(format!(
-                "{}\r\n",
-                self.links[self.matches[i]].link.uri()
-            )));
+            render_lines(
+                &self.ctx().doc,
+                &self.ctx().flow.borrow().lines,
+                self.links[self.matches[i]].start,
+                width,
+                1,
+                &highlights,
+                changes,
+            );
+            changes.push(Change::Text("\r\n".to_string()));
         }
     }
 }
@@ -581,12 +601,14 @@ impl<'a> Widget for SearchWidget<'a> {
                 x: Absolute(0),
                 y: Absolute(0),
             },
-            Change::Text(format!("{}\r\n", "-".repeat(width))),
         ];
-        self.ctx
-            .search
-            .borrow_mut()
-            .render(width, height - 2, &mut changes);
+        if height > 1 {
+            changes.push(Change::Text(format!("{}\r\n", "-".repeat(width))));
+            self.ctx
+                .search
+                .borrow_mut()
+                .render(width, height - 2, &mut changes);
+        }
         let search_label = format!("Search: {}", self.ctx.search.borrow().search);
         args.cursor.coords = ParentRelativeCoords {
             x: search_label.len(),
@@ -694,7 +716,7 @@ struct Ctx<'a> {
     search: RefCell<Search<'a>>,
 
     focus: Cell<WidgetId>,
-    term_dims: Cell<Dimensions>,
+    term_height: Cell<usize>,
 }
 
 impl<'a> Ctx<'a> {
@@ -702,7 +724,7 @@ impl<'a> Ctx<'a> {
         self.view.borrow_mut().highlights = vec![(start, end)];
         for (idx, line) in self.flow.borrow().lines.iter().enumerate() {
             if line.start_byte > start {
-                self.view.borrow_mut().set_line(idx.saturating_sub(1));
+                self.view.borrow_mut().set_line(idx.saturating_sub(3));
                 break;
             }
         }
@@ -722,27 +744,27 @@ impl<'a> Ctx<'a> {
     }
 
     fn all_but_status_height(&self) -> u16 {
-        self.term_dims.get().height as u16 - 1
-    }
-
-    fn half_height(&self) -> u16 {
-        self.all_but_status_height() / 2
+        self.term_height.get() as u16 - 1
     }
 
     fn search_height(&self) -> u16 {
         if self.search_visible() {
-            self.half_height()
+            let chrome_height = 2;
+            // Show at most 10 matches
+            (10 + chrome_height)
+                // but show fewer if that would take more than half the screen
+                .min(self.all_but_status_height() / 2)
+                // and only take up as many lines as we have matches
+                .min(self.search.borrow().matches.len() as u16 + chrome_height)
+                // but at least take 1 for search entry if that's all there is
+                .max(1)
         } else {
             0
         }
     }
 
     fn doc_height(&self) -> u16 {
-        if self.search_visible() {
-            self.half_height() + (self.all_but_status_height() % 2)
-        } else {
-            self.all_but_status_height()
-        }
+        self.all_but_status_height() - self.search_height()
     }
 }
 
@@ -758,10 +780,7 @@ impl<'a, T: Terminal> Ate<'a, T> {
     fn run(&mut self) -> Result<(), Error> {
         loop {
             let size = self.term.terminal().get_screen_size()?;
-            self.ctx.term_dims.set(Dimensions {
-                width: size.cols,
-                height: size.rows,
-            });
+            self.ctx.term_height.set(size.rows);
             self.ui.process_event_queue()?;
             self.ui.set_focus(self.ctx.focus.get());
 
@@ -785,10 +804,7 @@ impl<'a, T: Terminal> Ate<'a, T> {
                         self.term
                             .add_change(Change::ClearScreen(Default::default()));
                         self.term.resize(cols, rows);
-                        self.ctx.term_dims.set(Dimensions {
-                            width: cols,
-                            height: rows,
-                        });
+                        self.ctx.term_height.set(rows);
                         self.ui.queue_event(WidgetEvent::Input(input));
                     }
                     InputEvent::Key(KeyEvent {
@@ -828,7 +844,7 @@ fn create_ui<'a>(
         search_id: placeholder_id.clone(),
         doc_widget: placeholder_id.clone(),
         focus: Cell::new(WidgetId::new()),
-        term_dims: Cell::new(Dimensions { width, height }),
+        term_height: Cell::new(height),
         view: RefCell::new(DocumentView {
             highlights: vec![],
             line: 0,
@@ -848,7 +864,7 @@ fn create_ui<'a>(
         root_id,
         DocumentWidget {
             ctx: ctx.clone(),
-            last_render_size: None,
+            last_render_height: None,
         },
     );
     ctx.doc_widget.set(doc_id);
@@ -989,6 +1005,10 @@ mod tests {
         let mut ctx = create_test_ui(input, 10, 4);
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("B", cells[0].str());
+        let cells = &ctx.surface.screen_cells()[1];
+        assert_eq!("L", cells[0].str());
+        assert!(!cells[0].attrs().reverse());
+        assert!(!cells[1].attrs().reverse());
         assert_eq!(0, ctx.visited.borrow().len());
 
         ctx.ui
@@ -999,6 +1019,8 @@ mod tests {
         ctx.ui.process_event_queue().unwrap();
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         let cells = &ctx.surface.screen_cells()[0];
+        assert_eq!("B", cells[0].str());
+        let cells = &ctx.surface.screen_cells()[1];
         assert_eq!("L", cells[0].str());
         assert!(cells[0].attrs().reverse());
         assert!(cells[1].attrs().reverse());
