@@ -60,11 +60,10 @@ impl DocumentView {
     }
 
     fn percent(&self) -> Option<u8> {
-        if self.line == 0 {
+        if self.line == 0 || self.total_lines < self.page_height {
             return Some(0);
         }
-        let total_lines = self.total_lines;
-        let final_page_line = total_lines - self.page_height;
+        let final_page_line = self.total_lines - self.page_height;
         if final_page_line == self.line {
             Some(100)
         } else {
