@@ -6,5 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0.65"
+chrono = "0.4.22"
+fern = { version = "0.6.1", features = ["chrono"] }
+log = "0.4.17"
 termwiz = { version = "0.17.1", features = ["widgets"] }
 unicode-segmentation = "1.9.0"
+xdg = "2.4.1"

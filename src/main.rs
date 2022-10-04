@@ -1,11 +1,14 @@
+use crate::doc::Document;
+use anyhow::anyhow;
+use anyhow::Result;
+use doc::LinkRange;
+use log::{debug, info};
 use std::cell::{Cell, RefCell};
 use std::cmp::{max, min};
+use std::env;
 use std::io::{stdin, Read};
 use std::process::Command;
 use std::rc::{Rc, Weak};
-
-use crate::doc::Document;
-use doc::LinkRange;
 use termwiz::caps::Capabilities;
 use termwiz::cell::{grapheme_column_width, unicode_column_width, AttributeChange, CellAttributes};
 use termwiz::color::{AnsiColor, ColorAttribute};
@@ -19,7 +22,6 @@ use termwiz::widgets::layout::{ChildOrientation, Constraints};
 use termwiz::widgets::{
     ParentRelativeCoords, RenderArgs, Ui, UpdateArgs, Widget, WidgetEvent, WidgetId,
 };
-use termwiz::Error;
 mod doc;
 
 // Only valid for a particular text width due to reflowing
@@ -57,6 +59,16 @@ impl DocumentView {
 
     fn set_line(&mut self, line: usize) {
         self.line = line;
+    }
+
+    fn make_line_visible(&mut self, line: usize) {
+        debug!(
+            "Current {} New {}, End {}",
+            self.line, line, self.page_height
+        );
+        if line.saturating_sub(3) < self.line || (line + 3) > (self.line + self.page_height) {
+            self.set_line(line.saturating_sub(3))
+        }
     }
 
     fn percent(&self) -> Option<u8> {
@@ -461,6 +473,7 @@ impl<'a> Search<'a> {
         };
         let link = &self.links[self.matches[selected_idx]];
         let addr = link.link.uri();
+        info!("Opening {}", addr);
         (self.open_link)(addr);
     }
 
@@ -723,7 +736,7 @@ impl<'a> Ctx<'a> {
         self.view.borrow_mut().highlights = vec![(start, end)];
         for (idx, line) in self.flow.borrow().lines.iter().enumerate() {
             if line.start_byte > start {
-                self.view.borrow_mut().set_line(idx.saturating_sub(3));
+                self.view.borrow_mut().make_line_visible(idx);
                 break;
             }
         }
@@ -776,7 +789,9 @@ struct Ate<'a, T: Terminal> {
 }
 
 impl<'a, T: Terminal> Ate<'a, T> {
-    fn run(&mut self) -> Result<(), Error> {
+    fn run(&mut self) -> Result<()> {
+        let mut open_first = env::var("ATE_OPEN_FIRST").is_ok();
+        debug!("Open first link? {}", open_first);
         loop {
             let size = self.term.terminal().get_screen_size()?;
             self.ctx.term_height.set(size.rows);
@@ -789,6 +804,10 @@ impl<'a, T: Terminal> Ate<'a, T> {
                 // We have more events to process immediately; don't block waiting
                 // for input below, but jump to the top of the loop to re-run the
                 // updates.
+                continue;
+            } else if open_first {
+                open_first = false;
+                self.ctx.search.borrow_mut().open_selected();
                 continue;
             }
             // Compute an optimized delta to apply to the terminal and display it
@@ -820,7 +839,7 @@ impl<'a, T: Terminal> Ate<'a, T> {
                 },
                 Ok(None) => {}
                 Err(e) => {
-                    return Err(e);
+                    return Err(anyhow!(e));
                 }
             }
         }
@@ -834,7 +853,7 @@ fn create_ui<'a>(
     width: usize,
     height: usize,
     open_link: Box<dyn FnMut(&str) + 'a>,
-) -> Result<(Ui<'a>, RefCtx<'a>), Error> {
+) -> Result<(Ui<'a>, RefCtx<'a>)> {
     let doc = Document::new(input)?;
     let placeholder_id = Cell::new(WidgetId::new());
     let ctx = Rc::new(Ctx {
@@ -883,7 +902,22 @@ fn create_ui<'a>(
     Ok((ui, ctx))
 }
 
-fn main() -> Result<(), Error> {
+fn main() -> Result<()> {
+    let xdg_dirs = xdg::BaseDirectories::with_prefix("ate").unwrap();
+    fern::Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "{} {} {} {}",
+                chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f"),
+                record.target(),
+                record.level(),
+                message
+            ))
+        })
+        .level(log::LevelFilter::Debug)
+        .chain(fern::log_file(xdg_dirs.place_state_file("log")?)?)
+        .apply()?;
+    info!("ate started");
     let caps = Capabilities::new_from_env()?;
     let underlying_term = new_terminal(caps)?;
     let mut term = BufferedTerminal::new(underlying_term)?;
