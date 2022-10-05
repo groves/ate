@@ -12,6 +12,7 @@ use std::rc::{Rc, Weak};
 use termwiz::caps::Capabilities;
 use termwiz::cell::{grapheme_column_width, unicode_column_width, AttributeChange, CellAttributes};
 use termwiz::color::{AnsiColor, ColorAttribute};
+use termwiz::input::Modifiers;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
 use termwiz::surface::CursorShape;
 use termwiz::surface::{Change, Position::Absolute};
@@ -819,10 +820,14 @@ impl<'a, T: Terminal> Ate<'a, T> {
                         self.ui.queue_event(WidgetEvent::Input(input));
                     }
                     InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('C'),
+                        modifiers: Modifiers::CTRL,
+                    })
+                    | InputEvent::Key(KeyEvent {
                         key: KeyCode::Char('q'),
                         ..
                     }) => {
-                        // Quit the app when q is pressed
+                        // Quit the app when Ctrl-c or q are pressed
                         break;
                     }
                     _ => {
