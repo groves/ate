@@ -611,7 +611,7 @@ impl<'a> Widget for SearchWidget<'a> {
             },
         ];
         if height > 1 {
-            changes.push(Change::Text(format!("{}\r\n", "-".repeat(width))));
+            changes.push(Change::Text(format!("{}\r\n", "━".repeat(width))));
             self.ctx
                 .search
                 .borrow_mut()
