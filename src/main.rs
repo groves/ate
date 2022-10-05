@@ -1,11 +1,14 @@
 use crate::doc::Document;
 use anyhow::anyhow;
+use anyhow::bail;
 use anyhow::Result;
 use doc::LinkRange;
+use log::warn;
 use log::{debug, info};
 use std::cell::{Cell, RefCell};
 use std::cmp::{max, min};
 use std::env;
+use std::env::VarError;
 use std::io::{stdin, Read};
 use std::process;
 use std::process::Command;
@@ -387,12 +390,22 @@ impl<'a> Widget for StatusLine<'a> {
             x: Absolute(0),
             y: Absolute(0),
         });
+        let last_error: &Option<String> = &self.ctx.last_error.borrow();
+        let error_width = if let Some(err) = last_error {
+            args.surface.add_change(Change::Text(err.clone()));
+            unicode_column_width(&err, None)
+        } else {
+            0
+        };
         let progress = match self.ctx.view.borrow().percent() {
             Some(p) => format!("{}%", p),
             None => "?%".to_string(),
         };
         let progress_width = unicode_column_width(&progress, None);
         let surface_width = args.surface.dimensions().0;
+        if surface_width.saturating_sub(error_width + progress_width) < 1 {
+            return;
+        }
         args.surface.add_change(Change::CursorPosition {
             x: Absolute(surface_width.saturating_sub(progress_width)),
             y: Absolute(0),
@@ -411,14 +424,14 @@ struct Search<'a> {
     ctx: Weak<Ctx<'a>>,
     search: String,
     selected_idx: Option<usize>,
-    open_link: Box<dyn FnMut(&str) + 'a>,
+    open_link: Box<dyn FnMut(&str) -> Result<()> + 'a>,
     view_at_activation: Option<DocumentView>,
     matches: Vec<usize>,
     links: Vec<LinkRange>,
 }
 
 impl<'a> Search<'a> {
-    fn new(open_link: Box<dyn FnMut(&str) + 'a>) -> Search<'a> {
+    fn new(open_link: Box<dyn FnMut(&str) -> Result<()> + 'a>) -> Search<'a> {
         Search {
             open_link,
             ctx: Weak::new(),
@@ -470,7 +483,10 @@ impl<'a> Search<'a> {
         let link = &self.links[self.matches[selected_idx]];
         let addr = link.link.uri();
         info!("Opening {}", addr);
-        (self.open_link)(addr);
+        if let Err(e) = (self.open_link)(addr) {
+            warn!("Opening woes: {:?}", e);
+            self.ctx().last_error.borrow_mut().replace(e.to_string());
+        }
     }
 
     fn select_next(&mut self) {
@@ -737,6 +753,7 @@ struct Ctx<'a> {
     focus: Cell<WidgetId>,
     term_height: Cell<usize>,
     quit: Cell<bool>,
+    last_error: RefCell<Option<String>>,
 }
 
 impl<'a> Ctx<'a> {
@@ -855,7 +872,7 @@ fn create_ui<'a>(
     input: Box<dyn Read + 'a>,
     width: usize,
     height: usize,
-    open_link: Box<dyn FnMut(&str) + 'a>,
+    open_link: Box<dyn FnMut(&str) -> Result<()> + 'a>,
 ) -> Result<(Ui<'a>, RefCtx<'a>)> {
     let doc = Document::new(input)?;
     let placeholder_id = Cell::new(WidgetId::new());
@@ -874,6 +891,7 @@ fn create_ui<'a>(
         flow: RefCell::new(DocumentFlow::new(width)),
         search: RefCell::new(Search::new(open_link)),
         quit: Cell::new(false),
+        last_error: RefCell::new(None),
     });
     ctx.flow.borrow_mut().ctx = Rc::downgrade(&ctx);
     ctx.flow.borrow_mut().flow();
@@ -906,7 +924,7 @@ fn create_ui<'a>(
 }
 
 fn main() -> Result<()> {
-    let xdg_dirs = xdg::BaseDirectories::with_prefix("ate").unwrap();
+    let xdg_dirs = xdg::BaseDirectories::with_prefix("ate")?;
     fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
@@ -937,9 +955,20 @@ fn main() -> Result<()> {
         Box::new(stdin()),
         size.cols,
         size.rows,
-        Box::new(|uri| {
-            let output = Command::new(",edit").arg(uri).output().unwrap();
-            println!("{}", String::from_utf8(output.stdout).unwrap());
+        Box::new(|uri| -> Result<()> {
+            let opener = match env::var("ATE_OPENER") {
+                Ok(val) => val,
+                Err(e) => match e {
+                    VarError::NotPresent => bail!("ATE_OPENER must be defined to open links"),
+                    _ => bail!(e),
+                },
+            };
+            let output = Command::new(opener).arg(uri).output()?;
+            info!(
+                "Opener output {}",
+                String::from_utf8(output.stdout).unwrap()
+            );
+            Ok(())
         }),
     )?;
 
@@ -970,6 +999,7 @@ mod tests {
             height,
             Box::new(move |uri| {
                 visited.borrow_mut().push(uri.to_string());
+                Ok(())
             }),
         )
         .unwrap();
