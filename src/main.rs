@@ -385,20 +385,14 @@ impl<'a> Widget for StatusLine<'a> {
             x: Absolute(0),
             y: Absolute(0),
         });
-        let doc_name = &self.ctx.doc_name;
-        let doc_name_width = unicode_column_width(&doc_name, None);
-        args.surface.add_change(Change::Text(doc_name.to_string()));
         let progress = match self.ctx.view.borrow().percent() {
             Some(p) => format!("{}%", p),
             None => "?%".to_string(),
         };
         let progress_width = unicode_column_width(&progress, None);
         let surface_width = args.surface.dimensions().0;
-        if surface_width.saturating_sub(doc_name_width + progress_width) < 1 {
-            return;
-        }
         args.surface.add_change(Change::CursorPosition {
-            x: Absolute(surface_width - progress_width),
+            x: Absolute(surface_width.saturating_sub(progress_width)),
             y: Absolute(0),
         });
         args.surface.add_change(Change::Text(progress));
@@ -720,7 +714,6 @@ impl<'a> Widget for MainScreen<'a> {
 
 struct Ctx<'a> {
     doc: Document,
-    doc_name: String,
     search_id: Cell<WidgetId>,
     doc_widget: Cell<WidgetId>,
     flow: RefCell<DocumentFlow<'a>>,
@@ -849,7 +842,6 @@ impl<'a, T: Terminal> Ate<'a, T> {
 
 fn create_ui<'a>(
     input: Box<dyn Read + 'a>,
-    doc_name: String,
     width: usize,
     height: usize,
     open_link: Box<dyn FnMut(&str) + 'a>,
@@ -858,7 +850,6 @@ fn create_ui<'a>(
     let placeholder_id = Cell::new(WidgetId::new());
     let ctx = Rc::new(Ctx {
         doc,
-        doc_name,
         search_id: placeholder_id.clone(),
         doc_widget: placeholder_id.clone(),
         focus: Cell::new(WidgetId::new()),
@@ -927,7 +918,6 @@ fn main() -> Result<()> {
 
     let (ui, ctx) = create_ui(
         Box::new(stdin()),
-        "stdin".to_string(),
         size.cols,
         size.rows,
         Box::new(|uri| {
@@ -959,7 +949,6 @@ mod tests {
         let ctx_visited = visited.clone();
         let (mut ui, _) = create_ui(
             Box::new(Cursor::new(input.to_string())),
-            "tst".to_string(),
             width,
             height,
             Box::new(move |uri| {
@@ -989,13 +978,13 @@ mod tests {
             cells[1].attrs().foreground()
         );
         assert_eq!(ColorAttribute::Default, cells[2].attrs().foreground());
-        assert_eq!(ctx.surface.screen_chars_to_string(), "DRD\ntst\n");
+        assert_eq!(ctx.surface.screen_chars_to_string(), "DRD\n 0%\n");
     }
 
     #[test]
     fn render_short_doc() {
         let ctx = create_test_ui("Hi Bye", 3, 3);
-        assert_eq!(ctx.surface.screen_chars_to_string(), "Hi \nBye\ntst\n");
+        assert_eq!(ctx.surface.screen_chars_to_string(), "Hi \nBye\n 0%\n");
     }
 
     fn press_char_event(c: char) -> WidgetEvent {
