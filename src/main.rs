@@ -532,7 +532,7 @@ impl<'a> Search<'a> {
             }
             KeyEvent {
                 key: KeyCode::Char(c),
-                ..
+                modifiers: Modifiers::NONE | Modifiers::SHIFT,
             } => {
                 self.search.push(*c);
                 self.update_matches();
@@ -689,6 +689,18 @@ impl<'a> MainScreen<'a> {
                 self.ctx.search.borrow_mut().open_selected();
                 true
             }
+            KeyEvent {
+                key: KeyCode::Char('C'),
+                modifiers: Modifiers::CTRL,
+            }
+            | KeyEvent {
+                key: KeyCode::Char('q'),
+                ..
+            } => {
+                // Quit the app when Ctrl-c or q are pressed
+                self.ctx.quit.set(true);
+                true
+            }
             _ => false,
         }
     }
@@ -724,6 +736,7 @@ struct Ctx<'a> {
 
     focus: Cell<WidgetId>,
     term_height: Cell<usize>,
+    quit: Cell<bool>,
 }
 
 impl<'a> Ctx<'a> {
@@ -791,6 +804,9 @@ impl<'a, T: Terminal> Ate<'a, T> {
             let size = self.term.terminal().get_screen_size()?;
             self.ctx.term_height.set(size.rows);
             self.ui.process_event_queue()?;
+            if self.ctx.quit.get() {
+                break;
+            }
             self.ui.set_focus(self.ctx.focus.get());
 
             // After updating and processing all of the widgets, compose them
@@ -819,17 +835,6 @@ impl<'a, T: Terminal> Ate<'a, T> {
                         self.term.resize(cols, rows);
                         self.ctx.term_height.set(rows);
                         self.ui.queue_event(WidgetEvent::Input(input));
-                    }
-                    InputEvent::Key(KeyEvent {
-                        key: KeyCode::Char('C'),
-                        modifiers: Modifiers::CTRL,
-                    })
-                    | InputEvent::Key(KeyEvent {
-                        key: KeyCode::Char('q'),
-                        ..
-                    }) => {
-                        // Quit the app when Ctrl-c or q are pressed
-                        break;
                     }
                     _ => {
                         // Feed input into the Ui
@@ -868,6 +873,7 @@ fn create_ui<'a>(
         }),
         flow: RefCell::new(DocumentFlow::new(width)),
         search: RefCell::new(Search::new(open_link)),
+        quit: Cell::new(false),
     });
     ctx.flow.borrow_mut().ctx = Rc::downgrade(&ctx);
     ctx.flow.borrow_mut().flow();
