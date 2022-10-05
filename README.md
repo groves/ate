@@ -5,6 +5,9 @@ While it pages through text streams like existing terminal pagers, [less] has fa
 [terminal hyperlinks]: https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda
 [less]: https://github.com/gwsw/less
 
+https://user-images.githubusercontent.com/12270/194130296-993f60fd-bfee-4151-bc1c-93933a1db053.mp4
+
+
 Installation
 ============
 [Install Rust], clone this repo, and run `cargo install` in your clone.
