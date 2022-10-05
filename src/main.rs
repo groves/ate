@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::cmp::{max, min};
 use std::env;
 use std::io::{stdin, Read};
+use std::process;
 use std::process::Command;
 use std::rc::{Rc, Weak};
 use termwiz::caps::Capabilities;
@@ -914,6 +915,11 @@ fn main() -> Result<()> {
         .chain(fern::log_file(xdg_dirs.place_state_file("log")?)?)
         .apply()?;
     info!("ate started");
+    if atty::is(atty::Stream::Stdin) {
+        eprintln!("ate displays data from stdin i.e. pipe or redirect to ate");
+        process::exit(1);
+    }
+
     let caps = Capabilities::new_from_env()?;
     let underlying_term = new_terminal(caps)?;
     let mut term = BufferedTerminal::new(underlying_term)?;
