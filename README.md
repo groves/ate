@@ -7,6 +7,17 @@ While it pages through text streams like existing terminal pagers, [less] has fa
 
 https://user-images.githubusercontent.com/12270/194130296-993f60fd-bfee-4151-bc1c-93933a1db053.mp4
 
+In the video we:
+* Run [ripgrep] on the term `render` in this repo. We wrap ripgrep with [hyperer] to insert links to the matched files
+* Mouse over the links to show what was inserted
+* Rerun ripgrep feeding the output into `ate`
+* Step through the links with `n`
+* Search with `/` and whittle down to a single result
+* Hit `Enter` to open that match in our editor
+
+[hyperer]: https://github.com/groves/hyperer
+[ripgrep]: https://github.com/BurntSushi/ripgrep
+
 
 Installation
 ============
