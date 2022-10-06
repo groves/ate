@@ -74,6 +74,24 @@ It prints it out to the console immediately and also sends the output to a temp 
 If the cargo command fails, it sends that temp file to `ate`.
 It it's been less tna
 
+Getting Links
+=============
+`ate`'s most useful on text containing hyperlinks.
+Terminal hyperlinks are a relatively new feature, so few programs support them out of the box.
+`ls`, `gcc`, `systemd`, and [delta] are some that do.
+
+[delta]: https://github.com/dandavison/delta
+
+Until hyperlink support shows up in more programs, 
+we can wrap existing programs, detect things that could be linked in their output, and emit terminal links around that text.
+
+[hyperer] does that for [ripgrep] and [cargo].
+I highly recommend installing it and using ripgrep with it to get a sense of what `ate` does.
+It can also serve as a base for adding links to other commands.
+
+[hyperer]: https://github.com/groves/hyperer
+[ripgrep]: https://github.com/BurntSushi/ripgrep
+[cargo]: https://doc.rust-lang.org/cargo/
 
 What's Missing
 ==============
