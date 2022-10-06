@@ -57,6 +57,20 @@ All of `ate`'s configuration is done through environment variables:
 Program to invoke to open a link e.g. when `Enter` is pressed. 
 The selected link is passed to it as the first argument.
 
+`ate` expects to invoke this process and for it to open the file to edit in another window.
+For example, you can use [Vim's remote command][Vim remote] or [emacsclient] to do that.
+
+
+[Vim remote]: https://vimdoc.sourceforge.net/htmldoc/remote.html#--remote
+[emacsclient]: https://www.gnu.org/software/emacs/manual/html_node/emacs/Invoking-emacsclient.html
+
+[opener_examples] has scripts that can be used as openers.
+To use one, download it, modify it if your system differs, and export `ATE_OPENER` as the full path to the script.
+
+
+[opener_examples]: https://github.com/groves/ate/tree/main/opener_examples
+
+
 ### `ATE_OPEN_FIRST`
 If defined, `ate` will open the first link it finds on starting.
 I use this Bash script to run `cargo` and compile Rust:
