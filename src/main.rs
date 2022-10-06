@@ -923,6 +923,37 @@ fn create_ui<'a>(
     Ok((ui, ctx))
 }
 
+fn open(uri: &str) -> Result<()> {
+    let opener = match env::var("ATE_OPENER") {
+        Ok(val) => val,
+        Err(e) => match e {
+            VarError::NotPresent => bail!("ATE_OPENER must be defined to open links"),
+            _ => bail!(e),
+        },
+    };
+    info!("Using ATE_OPENER {}", opener);
+    // TODO - don't block forever waiting on this, complain if it takes too long
+    let output = match Command::new(&opener).arg(uri).output() {
+        Ok(o) => o,
+        // Don't use anyhow::context as it adds newlines
+        Err(e) => bail!("Failed to run ATE_OPENER {}: {}", opener, e),
+    };
+    info!("ATE_OPENER stdout={}", String::from_utf8(output.stdout)?);
+    let stderr = String::from_utf8(output.stderr)?;
+    info!("ATE_OPENER stderr={}", stderr);
+    match output.status.code() {
+        Some(0) | None => Ok(()),
+        Some(c) => {
+            bail!(
+                "ATE_OPENER {} failed with code={} stderr={}",
+                opener,
+                c,
+                stderr
+            );
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let xdg_dirs = xdg::BaseDirectories::with_prefix("ate")?;
     fern::Dispatch::new()
@@ -951,29 +982,9 @@ fn main() -> Result<()> {
     term.terminal().enter_alternate_screen()?;
     let size = term.terminal().get_screen_size()?;
 
-    let (ui, ctx) = create_ui(
-        Box::new(stdin()),
-        size.cols,
-        size.rows,
-        Box::new(|uri| -> Result<()> {
-            let opener = match env::var("ATE_OPENER") {
-                Ok(val) => val,
-                Err(e) => match e {
-                    VarError::NotPresent => bail!("ATE_OPENER must be defined to open links"),
-                    _ => bail!(e),
-                },
-            };
-            let output = Command::new(opener).arg(uri).output()?;
-            info!(
-                "Opener output {}",
-                String::from_utf8(output.stdout).unwrap()
-            );
-            Ok(())
-        }),
-    )?;
+    let (ui, ctx) = create_ui(Box::new(stdin()), size.cols, size.rows, Box::new(open))?;
 
-    Ate { ctx, term, ui }.run()?;
-    Ok(())
+    Ate { ctx, term, ui }.run()
 }
 
 #[cfg(test)]
@@ -1044,7 +1055,7 @@ mod tests {
     #[test]
     fn page() {
         let input = "1\n2\n3\n4\n5\n6";
-        let mut ctx = create_test_ui(input, 3, 6);
+        let mut ctx = create_test_ui(input, 5, 6);
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("1", cells[0].str());
@@ -1057,6 +1068,10 @@ mod tests {
         let screen = ctx.surface.screen_chars_to_string();
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("2", cells[0].str(), "{}", screen);
+        assert_eq!(
+            ctx.surface.screen_chars_to_string(),
+            "2    \n3    \n4    \n5    \n6    \n 100%\n"
+        );
 
         ctx.ui.queue_event(press_char_event('b'));
         // Going back while at the first line should stay at the first line
@@ -1065,6 +1080,10 @@ mod tests {
         ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("1", cells[0].str());
+        assert_eq!(
+            ctx.surface.screen_chars_to_string(),
+            "1    \n2    \n3    \n4    \n5    \n   0%\n"
+        );
     }
 
     #[test]
