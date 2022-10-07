@@ -14,3 +14,6 @@ finl_unicode = "1.1.0"
 log = "0.4.17"
 termwiz = { version = "0.18.0", features = ["widgets"] }
 xdg = "2.4.1"
+
+[patch.crates-io]
+termwiz = { path = "../wezterm/termwiz" }
