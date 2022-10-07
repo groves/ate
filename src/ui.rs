@@ -75,6 +75,11 @@ pub(crate) fn create_ui<'a>(
 
 pub(crate) type RefCtx<'a> = Rc<Ctx<'a>>;
 
+// TODO - Rework terwiz' Ui to pass Context to updates
+// I need access to these bits from in widgets, so I'm sharing this object between all of them.
+// Thats fairly gross Rust.
+// It'd be better to do something like xilem where I pass the context into update methods
+// https://raphlinus.github.io/rust/gui/2022/05/07/ui-architecture.html
 pub(crate) struct Ctx<'a> {
     doc: Document,
     search_id: Cell<WidgetId>,
