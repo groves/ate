@@ -95,11 +95,6 @@ if [[ ${PIPESTATUS[0]} -ne 0 ]] ; then
 fi
 ```
 
-That runs `hyperer-cargo` to add links to Rust compilation failures, test failures, and backtraces.
-It prints it out to the console immediately and also sends the output to a temp file.
-If the cargo command fails, it sends that temp file to `ate`.
-It it's been less tna
-
 Getting Links
 =============
 `ate`'s most useful on text containing hyperlinks.
