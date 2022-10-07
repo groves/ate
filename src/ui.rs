@@ -1,5 +1,6 @@
 use crate::doc::{Document, LinkRange};
 use anyhow::Result;
+use finl_unicode::grapheme_clusters::Graphemes;
 use log::warn;
 use log::{debug, info};
 use std::cell::{Cell, RefCell};
@@ -287,11 +288,7 @@ impl<'a> DocumentFlow<'a> {
         let doc = &self.ctx().doc;
         let width = self.width;
         let mut byte = 0;
-        use unicode_segmentation::UnicodeSegmentation;
-        let graphemes = doc
-            .text
-            .graphemes(true)
-            .map(|g| (g, grapheme_column_width(g, None)));
+        let graphemes = Graphemes::new(&doc.text).map(|g| (g, grapheme_column_width(g, None)));
         let mut attr_idx = 0;
         let mut cells_in_line = 0;
         let mut attributes = CellAttributes::default();
@@ -337,10 +334,7 @@ fn render_lines(
     highlights: &[(usize, usize)],
     changes: &mut Vec<Change>,
 ) {
-    use unicode_segmentation::UnicodeSegmentation;
-    let graphemes = doc.text[byte..]
-        .graphemes(true)
-        .map(|g| (g, grapheme_column_width(g, None)));
+    let graphemes = Graphemes::new(&doc.text[byte..]).map(|g| (g, grapheme_column_width(g, None)));
     let mut line = lines.partition_point(|l| l.start_byte < byte);
     let mut attr_idx = doc.attrs.partition_point(|(b, _)| *b < byte);
     let mut highlight_idx = highlights.partition_point(|(_, e)| *e <= byte);

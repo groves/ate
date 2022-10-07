@@ -34,9 +34,9 @@ dependencies = [
  "atty",
  "chrono",
  "fern",
+ "finl_unicode",
  "log",
  "termwiz",
- "unicode-segmentation",
  "xdg",
 ]
 
