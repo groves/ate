@@ -238,42 +238,6 @@ impl<'a> DocumentFlow<'a> {
         true
     }
 
-    fn apply(attributes: &mut CellAttributes, a: &AttributeChange) {
-        use termwiz::cell::AttributeChange::*;
-        match a {
-            Intensity(value) => {
-                attributes.set_intensity(*value);
-            }
-            Underline(value) => {
-                attributes.set_underline(*value);
-            }
-            Italic(value) => {
-                attributes.set_italic(*value);
-            }
-            Blink(value) => {
-                attributes.set_blink(*value);
-            }
-            Reverse(value) => {
-                attributes.set_reverse(*value);
-            }
-            StrikeThrough(value) => {
-                attributes.set_strikethrough(*value);
-            }
-            Invisible(value) => {
-                attributes.set_invisible(*value);
-            }
-            Foreground(value) => {
-                attributes.set_foreground(*value);
-            }
-            Background(value) => {
-                attributes.set_background(*value);
-            }
-            Hyperlink(value) => {
-                attributes.set_hyperlink(value.clone());
-            }
-        };
-    }
-
     fn ctx(&self) -> Rc<Ctx<'a>> {
         self.ctx
             .upgrade()
@@ -311,7 +275,7 @@ impl<'a> DocumentFlow<'a> {
                             attributes = CellAttributes::default();
                         }
                         Change::Attribute(a) => {
-                            Self::apply(&mut attributes, a);
+                            attributes.apply_change(a);
                         }
                         _ => unreachable!(),
                     }
