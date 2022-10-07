@@ -229,8 +229,7 @@ dependencies = [
 [[package]]
 name = "filedescriptor"
 version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7199d965852c3bac31f779ef99cbb4537f80e952e2d6aa0ffeb30cce00f4f46e"
+source = "git+https://github.com/wez/wezterm/?rev=c764888186bae1f3b683bf243fb599e3820d234f#c764888186bae1f3b683bf243fb599e3820d234f"
 dependencies = [
  "libc",
  "thiserror",
@@ -823,8 +822,7 @@ dependencies = [
 [[package]]
 name = "termwiz"
 version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25e302bfaa2555ca7fb55eee19051ad43e510153b19cb880d6da5acb65a72ab9"
+source = "git+https://github.com/wez/wezterm/?rev=c764888186bae1f3b683bf243fb599e3820d234f#c764888186bae1f3b683bf243fb599e3820d234f"
 dependencies = [
  "anyhow",
  "base64",
@@ -934,8 +932,7 @@ checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 [[package]]
 name = "vtparse"
 version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d9b2acfb050df409c972a37d3b8e08cdea3bddb0c09db9d53137e504cfabed0"
+source = "git+https://github.com/wez/wezterm/?rev=c764888186bae1f3b683bf243fb599e3820d234f#c764888186bae1f3b683bf243fb599e3820d234f"
 dependencies = [
  "utf8parse",
 ]
@@ -1015,8 +1012,7 @@ checksum = "1c38c045535d93ec4f0b4defec448e4291638ee608530863b1e2ba115d4fff7f"
 [[package]]
 name = "wezterm-bidi"
 version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "490b5c96b31b2a6f29189d548231bf12717b5fa853f06b25c05d848107296b18"
+source = "git+https://github.com/wez/wezterm/?rev=c764888186bae1f3b683bf243fb599e3820d234f#c764888186bae1f3b683bf243fb599e3820d234f"
 dependencies = [
  "log",
  "wezterm-dynamic",
@@ -1025,8 +1021,7 @@ dependencies = [
 [[package]]
 name = "wezterm-color-types"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c6e7a483dd2785ba72705c51e8b1be18300302db2a78368dac9bc8773857777"
+source = "git+https://github.com/wez/wezterm/?rev=c764888186bae1f3b683bf243fb599e3820d234f#c764888186bae1f3b683bf243fb599e3820d234f"
 dependencies = [
  "csscolorparser",
  "deltae",
@@ -1037,8 +1032,7 @@ dependencies = [
 [[package]]
 name = "wezterm-dynamic"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a75e78c0cc60a76de5d93f9dad05651105351e151b6446ab305514945d7588aa"
+source = "git+https://github.com/wez/wezterm/?rev=c764888186bae1f3b683bf243fb599e3820d234f#c764888186bae1f3b683bf243fb599e3820d234f"
 dependencies = [
  "log",
  "ordered-float",
@@ -1050,8 +1044,7 @@ dependencies = [
 [[package]]
 name = "wezterm-dynamic-derive"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c9f5ef318442d07b3d071f9f43ea40b80992f87faee14bb4d017b6991c307f0"
+source = "git+https://github.com/wez/wezterm/?rev=c764888186bae1f3b683bf243fb599e3820d234f#c764888186bae1f3b683bf243fb599e3820d234f"
 dependencies = [
  "proc-macro2",
  "quote",

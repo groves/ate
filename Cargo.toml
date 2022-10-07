@@ -12,5 +12,5 @@ chrono = "0.4.22"
 fern = { version = "0.6.1", features = ["chrono"] }
 finl_unicode = "1.1.0"
 log = "0.4.17"
-termwiz = { version = "0.18.0", features = ["widgets"] }
+termwiz = { git = "https://github.com/wez/wezterm/", rev = "c764888186bae1f3b683bf243fb599e3820d234f", features = ["widgets"] }
 xdg = "2.4.1"

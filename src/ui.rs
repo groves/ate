@@ -11,8 +11,8 @@ use termwiz::cell::{grapheme_column_width, unicode_column_width, AttributeChange
 use termwiz::color::{AnsiColor, ColorAttribute};
 use termwiz::input::Modifiers;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
-use termwiz::surface::CursorShape;
 use termwiz::surface::{Change, Position::Absolute};
+use termwiz::surface::{CursorShape, CursorVisibility};
 
 use termwiz::widgets::layout::{ChildOrientation, Constraints};
 use termwiz::widgets::{
@@ -463,15 +463,8 @@ impl<'a> Widget for DocumentWidget<'a> {
             &self.ctx.view.borrow().highlights,
             &mut changes,
         );
-        // TODO - add visibility setting to cursor in termwiz.
-        // This is the best I can do to make it less visible now.
-        // Changing the shape doesn't seem to work, either :(
-        args.cursor.coords = ParentRelativeCoords {
-            x: width + 1,
-            y: height - 1,
-        };
-
         args.surface.add_changes(changes);
+        args.cursor.visibility = CursorVisibility::Hidden;
     }
 
     fn process_event(&mut self, event: &WidgetEvent, _args: &mut UpdateArgs) -> bool {
