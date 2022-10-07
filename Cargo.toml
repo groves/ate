@@ -11,6 +11,6 @@ atty = "0.2.14"
 chrono = "0.4.22"
 fern = { version = "0.6.1", features = ["chrono"] }
 log = "0.4.17"
-termwiz = { version = "0.17.1", features = ["widgets"] }
+termwiz = { version = "0.18.0", features = ["widgets"] }
 unicode-segmentation = "1.9.0"
 xdg = "2.4.1"

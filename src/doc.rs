@@ -56,6 +56,8 @@ impl Document {
                             Sgr::StrikeThrough(s) => AttributeChange::StrikeThrough(s),
                             Sgr::Foreground(f) => AttributeChange::Foreground(f.into()),
                             Sgr::Inverse(i) => AttributeChange::Reverse(i),
+                            // TODO - add an Attribute change to termwiz for vertical align
+                            Sgr::VerticalAlign(_) => todo!(),
                             Sgr::UnderlineColor(_) => todo!(),
                             Sgr::Font(_) => todo!(),
                             Sgr::Overline(_) => todo!(),

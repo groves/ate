@@ -238,6 +238,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "finl_unicode"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7a5bc434676f696758465b59d15977aeda4943ed39cb6ae54db012e1d09dee8"
+
+[[package]]
 name = "fixedbitset"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -783,9 +789,9 @@ checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "syn"
-version = "1.0.101"
+version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e90cde112c4b9690b8cbe810cba9ddd8bc1d7472e2cae317b69e9438c1cba7d2"
+checksum = "3fcd952facd492f9be3ef0d0b7032a6e442ee9b361d4acc2b1d0c4aaa5f613a1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -816,9 +822,9 @@ dependencies = [
 
 [[package]]
 name = "termwiz"
-version = "0.17.1"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8afe4dd464afed784e203297d2af3dbe833fbded166a484587102cac73e56ff1"
+checksum = "25e302bfaa2555ca7fb55eee19051ad43e510153b19cb880d6da5acb65a72ab9"
 dependencies = [
  "anyhow",
  "base64",
@@ -826,6 +832,7 @@ dependencies = [
  "cassowary",
  "cfg-if 1.0.0",
  "filedescriptor",
+ "finl_unicode",
  "fixedbitset",
  "fnv",
  "hex",
@@ -844,6 +851,7 @@ dependencies = [
  "semver",
  "sha2",
  "signal-hook",
+ "siphasher",
  "terminfo",
  "termios",
  "thiserror",
