@@ -10,14 +10,13 @@ use termwiz::hyperlink::Hyperlink;
 use termwiz::surface::Change;
 use termwiz::Error;
 
-#[derive(Clone)]
-pub(crate) struct LinkRange {
+pub struct LinkRange {
     pub start: usize,
     pub end: usize,
     pub link: Hyperlink,
 }
 
-pub(crate) struct Document {
+pub struct Document {
     // The displayed characters of the input
     // i.e. input bytes with control characters stripped out
     pub text: String,
@@ -31,8 +30,8 @@ pub(crate) struct Document {
 
 impl Document {
     pub fn new<'a>(mut input: Box<dyn Read + 'a>) -> Result<Document, Error> {
-        // TODO - lazily read and parse in Document::render
         let mut buf = vec![];
+        // TODO - lazily read past first gig or so
         let read = input.read_to_end(&mut buf)?;
         let mut text = String::new();
         let mut links = vec![];
@@ -95,12 +94,13 @@ impl Document {
         if let Some((start, link)) = partial_link {
             complete_link(start, link, text.len());
         }
+
         Ok(Document { text, attrs, links })
     }
 }
+
 #[cfg(test)]
 mod tests {
-
     use std::io::Cursor;
 
     use super::*;

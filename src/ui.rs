@@ -1,13 +1,13 @@
-use crate::doc::{Document, LinkRange};
+use crate::doc::Document;
+use crate::state::{DocumentView, Shared, State};
+use crate::Ids;
 use anyhow::Result;
 use finl_unicode::grapheme_clusters::Graphemes;
-use log::warn;
-use log::{debug, info};
-use std::cell::{Cell, RefCell};
-use std::cmp::{max, min};
+use std::cell::RefCell;
+use std::cmp::min;
 use std::io::Read;
-use std::rc::{Rc, Weak};
-use termwiz::cell::{grapheme_column_width, unicode_column_width, AttributeChange, CellAttributes};
+use std::rc::Rc;
+use termwiz::cell::{grapheme_column_width, unicode_column_width, AttributeChange};
 use termwiz::color::{AnsiColor, ColorAttribute};
 use termwiz::input::Modifiers;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
@@ -15,55 +15,24 @@ use termwiz::surface::{Change, Position::Absolute};
 use termwiz::surface::{CursorShape, CursorVisibility};
 
 use termwiz::widgets::layout::{ChildOrientation, Constraints};
-use termwiz::widgets::{
-    ParentRelativeCoords, RenderArgs, Ui, UpdateArgs, Widget, WidgetEvent, WidgetId,
-};
+use termwiz::widgets::{ParentRelativeCoords, RenderArgs, Ui, UpdateArgs, Widget, WidgetEvent};
 
-pub(crate) fn create_ui<'a>(
-    input: Box<dyn Read + 'a>,
+pub fn create_ui<'a>(
+    input: Box<dyn Read>,
     width: usize,
     height: usize,
-    open_link: Box<dyn FnMut(&str) -> Result<()> + 'a>,
-) -> Result<(Ui<'a>, RefCtx<'a>)> {
-    let doc = Document::new(input)?;
-    let placeholder_id = Cell::new(WidgetId::new());
-    let ctx = Rc::new(Ctx {
-        doc,
-        search_id: placeholder_id.clone(),
-        doc_widget: placeholder_id.clone(),
-        focus: Cell::new(WidgetId::new()),
-        term_height: Cell::new(height),
-        view: RefCell::new(DocumentView {
-            highlights: vec![],
-            line: 0,
-            page_height: 0,
-            total_lines: 0,
-        }),
-        flow: RefCell::new(DocumentFlow::new(width)),
-        search: RefCell::new(Search::new(open_link)),
-        quit: Cell::new(false),
-        last_error: RefCell::new(None),
-    });
-    ctx.flow.borrow_mut().ctx = Rc::downgrade(&ctx);
-    ctx.flow.borrow_mut().flow();
-    ctx.search.borrow_mut().set_ctx(&ctx);
-
-    let mut ui = Ui::new();
-    let root_id = ui.set_root(MainScreen { ctx: ctx.clone() });
-    let doc_id = ui.add_child(
-        root_id,
-        DocumentWidget {
-            ctx: ctx.clone(),
-            last_render_height: None,
-        },
-    );
-    ctx.doc_widget.set(doc_id);
-    ctx.focus.set(doc_id);
+    open_link: Box<dyn FnMut(&str) -> Result<()>>,
+    open_first: bool,
+) -> Result<(Ui<'a, State>, Rc<RefCell<Shared>>, Ids)> {
+    let doc = Rc::new(Document::new(input)?);
+    let state = State::new(doc, open_link, width, height);
+    let shared = state.shared.clone();
+    let mut ui = Ui::new(state);
+    let root_id = ui.set_root(MainWidget {});
+    let doc_id = ui.add_child(root_id, DocumentWidget {});
     ui.set_focus(doc_id);
-
-    ctx.search_id
-        .set(ui.add_child(root_id, SearchWidget { ctx: ctx.clone() }));
-    ui.add_child(root_id, StatusLine { ctx: ctx.clone() });
+    let search_id = ui.add_child(root_id, SearchWidget {});
+    ui.add_child(root_id, StatusWidget {});
 
     // Send a resize event through to get us to do an initial layout
     ui.queue_event(WidgetEvent::Input(InputEvent::Resized {
@@ -71,246 +40,41 @@ pub(crate) fn create_ui<'a>(
         rows: height,
     }));
     ui.process_event_queue()?;
-    Ok((ui, ctx))
-}
-
-pub(crate) type RefCtx<'a> = Rc<Ctx<'a>>;
-
-// TODO - Rework terwiz' Ui to pass Context to updates
-// I need access to these bits from in widgets, so I'm sharing this object between all of them.
-// Thats fairly gross Rust.
-// It'd be better to do something like xilem where I pass the context into update methods
-// https://raphlinus.github.io/rust/gui/2022/05/07/ui-architecture.html
-pub(crate) struct Ctx<'a> {
-    doc: Document,
-    search_id: Cell<WidgetId>,
-    doc_widget: Cell<WidgetId>,
-    flow: RefCell<DocumentFlow<'a>>,
-    view: RefCell<DocumentView>,
-    search: RefCell<Search<'a>>,
-
-    last_error: RefCell<Option<String>>,
-
-    pub focus: Cell<WidgetId>,
-    pub term_height: Cell<usize>,
-    pub quit: Cell<bool>,
-}
-
-impl<'a> Ctx<'a> {
-    pub fn open_selected(&self) {
-        self.search.borrow_mut().open_selected();
+    if open_first {
+        ui.queue_event(WidgetEvent::Input(InputEvent::Key(KeyEvent {
+            key: KeyCode::Enter,
+            modifiers: Modifiers::NONE,
+        })));
     }
-
-    fn highlight(&self, start: usize, end: usize) {
-        self.view.borrow_mut().highlights = vec![(start, end)];
-        for (idx, line) in self.flow.borrow().lines.iter().enumerate() {
-            if line.start_byte > start {
-                self.view.borrow_mut().make_line_visible(idx);
-                break;
-            }
-        }
-    }
-
-    fn search_visible(&self) -> bool {
-        self.focus.get() == self.search_id.get()
-    }
-
-    fn activate_search(&self) {
-        self.focus.set(self.search_id.get());
-        self.search.borrow_mut().activate();
-    }
-
-    fn deactivate_search(&self) {
-        self.focus.set(self.doc_widget.get());
-    }
-
-    fn all_but_status_height(&self) -> u16 {
-        self.term_height.get() as u16 - 1
-    }
-
-    fn search_height(&self) -> u16 {
-        if self.search_visible() {
-            let chrome_height = 2;
-            // Show at most 10 matches
-            (10 + chrome_height)
-                // but show fewer if that would take more than half the screen
-                .min(self.all_but_status_height() / 2)
-                // and only take up as many lines as we have matches
-                .min(self.search.borrow().matches.len() as u16 + chrome_height)
-                // but at least take 1 for search entry if that's all there is
-                .max(1)
-        } else {
-            0
-        }
-    }
-
-    fn doc_height(&self) -> u16 {
-        self.all_but_status_height() - self.search_height()
-    }
-}
-
-// Only valid for a particular text width due to reflowing
-struct Line {
-    start_byte: usize,
-    // The full set of active attributes to let set up this line for rendering.
-    start_attributes: CellAttributes,
-}
-
-#[derive(Clone)]
-struct DocumentView {
-    // Reverses the reverse display of bytes in these ranges.
-    // If reverse is off for a byte, flips it on and vice versa.
-    highlights: Vec<(usize, usize)>,
-    // First displayed line
-    // Used for paging forward and backwards.
-    // In reflow, the start_byte of this line is kept in the first_displayed_line of the reflowed
-    // lines
-    line: usize,
-    total_lines: usize,
-    page_height: usize,
-}
-
-impl DocumentView {
-    fn backward(&mut self, lines: usize) {
-        self.line = self.line.saturating_sub(lines);
-    }
-
-    fn forward(&mut self, lines: usize) {
-        self.line = min(
-            self.total_lines.saturating_sub(self.page_height),
-            self.line + max(1, lines),
-        );
-    }
-
-    fn set_line(&mut self, line: usize) {
-        self.line = line;
-    }
-
-    fn make_line_visible(&mut self, line: usize) {
-        debug!(
-            "Current {} New {}, End {}",
-            self.line, line, self.page_height
-        );
-        if line.saturating_sub(3) < self.line || (line + 3) > (self.line + self.page_height) {
-            self.set_line(line.saturating_sub(3))
-        }
-    }
-
-    fn percent(&self) -> Option<u8> {
-        if self.line == 0 || self.total_lines < self.page_height {
-            return Some(0);
-        }
-        let final_page_line = self.total_lines - self.page_height;
-        if final_page_line == self.line {
-            Some(100)
-        } else {
-            let percent = (self.line as f64 / (final_page_line as f64)) * 100.0;
-            Some(percent.floor() as u8)
-        }
-    }
-}
-
-struct DocumentFlow<'a> {
-    ctx: Weak<Ctx<'a>>,
-    width: usize,
-    // Cache of doc.text flown at the last_render_size. Will be cleared if the size changes.
-    // We cache the start point of the line so that when we go backwards, we can rerender without
-    // having to start from the start of the document to find where long lines break.
-    lines: Vec<Line>,
-}
-
-impl<'a> DocumentFlow<'a> {
-    fn new(width: usize) -> DocumentFlow<'a> {
-        DocumentFlow {
-            width,
-            ctx: Weak::new(),
-            lines: vec![],
-        }
-    }
-
-    fn set_width(&mut self, width: usize) -> bool {
-        if width == self.width {
-            return false;
-        }
-        // TODO - update ctx.view.line to keep current view position
-        self.width = width;
-        self.flow();
-        true
-    }
-
-    fn ctx(&self) -> Rc<Ctx<'a>> {
-        self.ctx
-            .upgrade()
-            .expect("Ctx shouldn't go away since it owns flow")
-    }
-
-    fn flow(&mut self) {
-        // TODO - Only flow the lines necessary to render the screen.
-        // Read from the underlying stream if at the point of flowing.
-        self.lines.clear();
-
-        let doc = &self.ctx().doc;
-        let width = self.width;
-        let mut byte = 0;
-        let graphemes = Graphemes::new(&doc.text).map(|g| (g, grapheme_column_width(g, None)));
-        let mut attr_idx = 0;
-        let mut cells_in_line = 0;
-        let mut attributes = CellAttributes::default();
-        self.lines.push(Line {
-            start_byte: byte,
-            start_attributes: attributes.clone(),
-        });
-        for (grapheme, cells) in graphemes {
-            if cells_in_line + cells > width || grapheme == "\n" {
-                self.lines.push(Line {
-                    start_byte: if grapheme == "\n" { byte + 1 } else { byte },
-                    start_attributes: attributes.clone(),
-                });
-                cells_in_line = 0;
-            }
-            if grapheme != "\n" {
-                while attr_idx < doc.attrs.len() && byte >= doc.attrs[attr_idx].0 {
-                    match &doc.attrs[attr_idx].1 {
-                        Change::AllAttributes(_) => {
-                            attributes = CellAttributes::default();
-                        }
-                        Change::Attribute(a) => {
-                            attributes.apply_change(a);
-                        }
-                        _ => unreachable!(),
-                    }
-                    attr_idx += 1;
-                }
-                cells_in_line += cells;
-            }
-            byte += grapheme.len();
-        }
-        self.ctx().view.borrow_mut().total_lines = self.lines.len();
-    }
+    Ok((ui, shared, Ids { doc_id, search_id }))
 }
 
 fn render_lines(
     doc: &Document,
-    lines: &[Line],
-    mut byte: usize,
-    width: usize,
+    view: &DocumentView,
+    mut line: usize,
     height: usize,
     highlights: &[(usize, usize)],
     changes: &mut Vec<Change>,
 ) {
-    let graphemes = Graphemes::new(&doc.text[byte..]).map(|g| (g, grapheme_column_width(g, None)));
-    let mut line = lines.partition_point(|l| l.start_byte < byte);
-    let mut attr_idx = doc.attrs.partition_point(|(b, _)| *b < byte);
-    let mut highlight_idx = highlights.partition_point(|(_, e)| *e <= byte);
-    let mut highlight: Option<(usize, usize)> = None;
+    let mut byte = view.lines()[line].start_byte;
+    let line_attrs = view.lines()[line].start_attributes.clone();
     // Tracks the inverse sgr state for byte.
     // We switch it when in a highlight and then go back to the set state when exiting
     // the highlight
-    let mut reversed = lines[line].start_attributes.reverse();
+    let mut reversed = line_attrs.reverse();
+    // Start with our line's state
+    changes.push(Change::AllAttributes(line_attrs));
+
+    let mut attr_idx = doc.attrs.partition_point(|(b, _)| *b < byte);
+    let mut highlight_idx = highlights.partition_point(|(_, e)| *e <= byte);
+    let mut highlight: Option<(usize, usize)> = None;
     let mut cells_in_line = 0;
-    let last_displayed_line = min(lines.len(), line + height) - 1;
-    for (grapheme, cells) in graphemes {
-        if cells_in_line + cells > width || grapheme == "\n" {
+    let last_displayed_line = min(view.lines().len(), line + height) - 1;
+    for (grapheme, cells) in
+        Graphemes::new(&doc.text[byte..]).map(|g| (g, grapheme_column_width(g, None)))
+    {
+        if cells_in_line + cells > view.width() || grapheme == "\n" {
             if line == last_displayed_line {
                 break;
             }
@@ -353,45 +117,37 @@ fn render_lines(
     }
 }
 
-struct DocumentWidget<'a> {
-    ctx: RefCtx<'a>,
-    last_render_height: Option<usize>,
-}
+struct DocumentWidget {}
 
-impl<'a> DocumentWidget<'a> {
-    fn height(&self) -> usize {
-        self.last_render_height
-            .expect("Must render before accessing height")
-    }
-
-    fn process_key(&mut self, event: &KeyEvent) -> bool {
+impl DocumentWidget {
+    fn process_key(&mut self, event: &KeyEvent, state: &mut State) -> bool {
         match event {
             KeyEvent {
                 key: KeyCode::UpArrow,
                 ..
             } => {
-                self.ctx.view.borrow_mut().backward(1);
+                state.view.backward(1);
                 true
             }
             KeyEvent {
                 key: KeyCode::DownArrow,
                 ..
             } => {
-                self.ctx.view.borrow_mut().forward(1);
+                state.view.forward(1);
                 true
             }
             KeyEvent {
                 key: KeyCode::Char(' '),
                 ..
             } => {
-                self.ctx.view.borrow_mut().forward(self.height() - 2);
+                state.view.forward(state.view.height() - 2);
                 true
             }
             KeyEvent {
                 key: KeyCode::Char('b'),
                 ..
             } => {
-                self.ctx.view.borrow_mut().backward(self.height() - 2);
+                state.view.backward(state.view.height() - 2);
                 true
             }
             KeyEvent { .. } => false,
@@ -399,277 +155,161 @@ impl<'a> DocumentWidget<'a> {
     }
 }
 
-impl<'a> Widget for DocumentWidget<'a> {
-    fn render(&mut self, args: &mut RenderArgs) {
+impl Widget<State> for DocumentWidget {
+    fn render(&mut self, args: &mut RenderArgs, state: &mut State) {
         let (width, height) = args.surface.dimensions();
-        assert!(width > 0);
-        assert!(height > 0);
-        self.last_render_height = Some(height);
+        assert!(width > 0 && height > 0);
+        state.view.set_size(width, height);
 
-        self.ctx.flow.borrow_mut().set_width(width);
-        self.ctx.view.borrow_mut().page_height = height;
-
-        let first_line = &self.ctx.flow.borrow().lines[self.ctx.view.borrow().line];
         let mut changes = vec![
             Change::ClearScreen(ColorAttribute::Default),
             Change::CursorPosition {
                 x: Absolute(0),
                 y: Absolute(0),
             },
-            Change::AllAttributes(first_line.start_attributes.clone()),
         ];
         render_lines(
-            &self.ctx.doc,
-            &self.ctx.flow.borrow().lines,
-            first_line.start_byte,
-            width,
+            &state.doc,
+            &state.view,
+            state.view.line(),
             height,
-            &self.ctx.view.borrow().highlights,
+            state.view.highlights(),
             &mut changes,
         );
         args.surface.add_changes(changes);
         args.cursor.visibility = CursorVisibility::Hidden;
     }
 
-    fn process_event(&mut self, event: &WidgetEvent, _args: &mut UpdateArgs) -> bool {
+    fn process_event(
+        &mut self,
+        event: &WidgetEvent,
+        _args: &mut UpdateArgs,
+        state: &mut State,
+    ) -> bool {
         match event {
             WidgetEvent::Input(i) => match i {
-                InputEvent::Key(k) => self.process_key(k),
+                InputEvent::Key(k) => self.process_key(k, state),
                 _ => false,
             },
         }
     }
 
-    fn get_size_constraints(&self) -> Constraints {
+    fn get_size_constraints(&self, state: &State) -> Constraints {
         let mut c = Constraints::default();
-        c.set_fixed_height(self.ctx.doc_height());
+        c.set_fixed_height(state.doc_height());
         c
     }
 }
 
 // This is a little status line widget that we render at the bottom
-struct StatusLine<'a> {
-    ctx: RefCtx<'a>,
-}
+struct StatusWidget {}
 
-impl<'a> Widget for StatusLine<'a> {
-    fn render(&mut self, args: &mut RenderArgs) {
-        args.surface
-            .add_change(Change::ClearScreen(AnsiColor::Grey.into()));
-        args.surface.add_change(Change::CursorPosition {
-            x: Absolute(0),
-            y: Absolute(0),
-        });
-        let last_error: &Option<String> = &self.ctx.last_error.borrow();
+impl Widget<State> for StatusWidget {
+    fn render(&mut self, args: &mut RenderArgs, state: &mut State) {
+        let mut changes = vec![
+            Change::ClearScreen(AnsiColor::Grey.into()),
+            Change::CursorPosition {
+                x: Absolute(0),
+                y: Absolute(0),
+            },
+        ];
+        let last_error: &Option<String> = &state.last_error;
         let error_width = if let Some(err) = last_error {
-            args.surface.add_change(Change::Text(err.clone()));
+            changes.push(Change::Text(err.clone()));
             unicode_column_width(&err, None)
         } else {
             0
         };
-        let progress = match self.ctx.view.borrow().percent() {
+        let progress = match state.view.percent() {
             Some(p) => format!("{}%", p),
             None => "?%".to_string(),
         };
         let progress_width = unicode_column_width(&progress, None);
         let surface_width = args.surface.dimensions().0;
-        if surface_width.saturating_sub(error_width + progress_width) < 1 {
-            return;
+        if surface_width.saturating_sub(error_width + progress_width) >= 1 {
+            changes.push(Change::CursorPosition {
+                x: Absolute(surface_width.saturating_sub(progress_width)),
+                y: Absolute(0),
+            });
+            changes.push(Change::Text(progress));
         }
-        args.surface.add_change(Change::CursorPosition {
-            x: Absolute(surface_width.saturating_sub(progress_width)),
-            y: Absolute(0),
-        });
-        args.surface.add_change(Change::Text(progress));
+        args.surface.add_changes(changes);
     }
 
-    fn get_size_constraints(&self) -> Constraints {
+    fn get_size_constraints(&self, _state: &State) -> Constraints {
         let mut c = Constraints::default();
         c.set_fixed_height(1);
         c
     }
 }
 
-struct Search<'a> {
-    ctx: Weak<Ctx<'a>>,
-    search: String,
-    selected_idx: Option<usize>,
-    open_link: Box<dyn FnMut(&str) -> Result<()> + 'a>,
-    view_at_activation: Option<DocumentView>,
-    matches: Vec<usize>,
-    links: Vec<LinkRange>,
-}
-
-impl<'a> Search<'a> {
-    fn new(open_link: Box<dyn FnMut(&str) -> Result<()> + 'a>) -> Search<'a> {
-        Search {
-            open_link,
-            ctx: Weak::new(),
-            search: String::new(),
-            selected_idx: None,
-            view_at_activation: None,
-            matches: vec![],
-            links: vec![],
-        }
-    }
-
-    fn set_ctx(&mut self, ctx: &Rc<Ctx<'a>>) {
-        self.ctx = Rc::downgrade(ctx);
-        self.links = self.ctx().doc.links.to_vec();
-        self.matches = self.links.iter().enumerate().map(|(i, _)| i).collect();
-    }
-
-    fn ctx(&self) -> Rc<Ctx<'a>> {
-        self.ctx
-            .upgrade()
-            .expect("Ctx shouldn't go away since it owns flow")
-    }
-
-    fn activate(&mut self) {
-        self.view_at_activation = Some(self.ctx().view.borrow().clone());
-        self.set_selected_idx(self.selected_idx.unwrap_or(0));
-    }
-
-    fn set_selected_idx(&mut self, selected_idx: usize) {
-        if selected_idx >= self.matches.len() {
-            return;
-        }
-        self.selected_idx = Some(selected_idx);
-        let link = &self.links[self.matches[selected_idx]];
-        self.ctx().highlight(link.start, link.end);
-    }
-
-    fn open_selected(&mut self) {
-        if self.matches.len() == 0 {
-            return;
-        }
-        let selected_idx = match self.selected_idx {
-            Some(idx) => idx,
-            None => {
-                self.set_selected_idx(0);
-                0
-            }
-        };
-        let link = &self.links[self.matches[selected_idx]];
-        let addr = link.link.uri();
-        info!("Opening {}", addr);
-        if let Err(e) = (self.open_link)(addr) {
-            warn!("Opening woes: {:?}", e);
-            self.ctx().last_error.borrow_mut().replace(e.to_string());
-        }
-    }
-
-    fn select_next(&mut self) {
-        self.set_selected_idx(if let Some(idx) = self.selected_idx {
-            idx + 1
-        } else {
-            0
-        });
-    }
-
-    fn select_prev(&mut self) {
-        self.set_selected_idx(if let Some(idx) = self.selected_idx {
-            idx.saturating_sub(1)
-        } else {
-            0
-        });
-    }
-
-    fn update_matches(&mut self) {
-        let previous_link_idx = if self.matches.len() > 0 {
-            self.matches[self.selected_idx.unwrap_or(0)]
-        } else {
-            0
-        };
-        self.matches = self
-            .links
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| self.ctx().doc.text[l.start..l.end].contains(&self.search))
-            .map(|(i, _)| i)
-            .collect();
-        let mut new_selected_idx = self
-            .matches
-            .partition_point(|link_idx| link_idx < &previous_link_idx);
-        if new_selected_idx == self.matches.len() {
-            new_selected_idx = self.matches.len().saturating_sub(1);
-        }
-        self.set_selected_idx(new_selected_idx);
-    }
-
-    fn process_key(&mut self, event: &KeyEvent) -> bool {
+impl SearchWidget {
+    fn process_key(&mut self, event: &KeyEvent, state: &mut State) -> bool {
         match event {
             KeyEvent {
                 key: KeyCode::Enter,
                 ..
             } => {
-                self.ctx().deactivate_search();
+                state.close_search();
                 true
             }
             KeyEvent {
                 key: KeyCode::Escape,
                 ..
             } => {
-                self.ctx().deactivate_search();
-                self.ctx()
-                    .view
-                    .replace(self.view_at_activation.take().unwrap());
+                state.cancel_search();
                 true
             }
             KeyEvent {
                 key: KeyCode::Char(c),
                 modifiers: Modifiers::NONE | Modifiers::SHIFT,
             } => {
-                self.search.push(*c);
-                self.update_matches();
+                state.search.push_query_char(*c, &mut state.view);
                 true
             }
             KeyEvent {
                 key: KeyCode::Backspace,
                 ..
             } => {
-                self.search.pop();
-                self.update_matches();
+                Some(state.search.pop_query_char(&mut state.view));
                 true
             }
             KeyEvent {
                 key: KeyCode::UpArrow,
                 ..
             } => {
-                self.select_prev();
+                Some(state.search.select_prev(&mut state.view));
                 true
             }
             KeyEvent {
                 key: KeyCode::DownArrow,
                 ..
             } => {
-                self.select_next();
+                Some(state.search.select_next(&mut state.view));
                 true
             }
             _ => false,
         }
     }
 
-    fn render(&mut self, width: usize, height: usize, changes: &mut Vec<Change>) {
-        if self.matches.len() == 0 {
+    fn render_matches(&mut self, height: usize, changes: &mut Vec<Change>, state: &mut State) {
+        if state.search.matches().len() == 0 {
             return;
         }
-        let selected_idx = self.selected_idx.unwrap_or(0);
+        let selected_idx = state.search.selected_idx().unwrap_or(0);
         let first_visible_idx = selected_idx.saturating_sub(height);
-        let selected = &self.links[self.matches[selected_idx]];
+        let selected = &state.doc.links[state.search.matches()[selected_idx]];
         let highlights = vec![(selected.start, selected.end)];
         for i in first_visible_idx..(first_visible_idx + height) {
-            if i >= self.matches.len() {
+            if i >= state.search.matches().len() {
                 break;
             }
-            changes.push(Change::Attribute(AttributeChange::Reverse(
-                i == selected_idx,
-            )));
             render_lines(
-                &self.ctx().doc,
-                &self.ctx().flow.borrow().lines,
-                self.links[self.matches[i]].start,
-                width,
+                &state.doc,
+                &state.view,
+                state
+                    .view
+                    .find_line(state.doc.links[state.search.matches()[i]].start),
                 1,
                 &highlights,
                 changes,
@@ -679,12 +319,10 @@ impl<'a> Search<'a> {
     }
 }
 
-struct SearchWidget<'a> {
-    ctx: RefCtx<'a>,
-}
+struct SearchWidget {}
 
-impl<'a> Widget for SearchWidget<'a> {
-    fn render(&mut self, args: &mut RenderArgs) {
+impl Widget<State> for SearchWidget {
+    fn render(&mut self, args: &mut RenderArgs, state: &mut State) {
         let (width, height) = args.surface.dimensions();
         if height == 0 {
             return;
@@ -698,12 +336,9 @@ impl<'a> Widget for SearchWidget<'a> {
         ];
         if height > 1 {
             changes.push(Change::Text(format!("{}\r\n", "━".repeat(width))));
-            self.ctx
-                .search
-                .borrow_mut()
-                .render(width, height - 2, &mut changes);
+            self.render_matches(height - 2, &mut changes, state);
         }
-        let search_label = format!("Search: {}", self.ctx.search.borrow().search);
+        let search_label = format!("Search: {}", state.search.query());
         args.cursor.coords = ParentRelativeCoords {
             x: search_label.len(),
             y: height - 1,
@@ -719,18 +354,23 @@ impl<'a> Widget for SearchWidget<'a> {
         args.surface.add_changes(changes);
     }
 
-    fn get_size_constraints(&self) -> Constraints {
+    fn get_size_constraints(&self, state: &State) -> Constraints {
         let mut c = Constraints::default();
-        c.set_fixed_height(self.ctx.search_height());
+        c.set_fixed_height(state.search_height());
         c
     }
 
-    fn process_event(&mut self, event: &WidgetEvent, _args: &mut UpdateArgs) -> bool {
+    fn process_event(
+        &mut self,
+        event: &WidgetEvent,
+        _args: &mut UpdateArgs,
+        state: &mut State,
+    ) -> bool {
         match event {
             WidgetEvent::Input(i) => match i {
-                InputEvent::Key(k) => self.ctx.search.borrow_mut().process_key(k),
+                InputEvent::Key(k) => self.process_key(k, state),
                 InputEvent::Paste(s) => {
-                    self.ctx.search.borrow_mut().search.push_str(&s);
+                    state.search.push_query_str(&s, &mut state.view);
                     true
                 }
                 _ => false,
@@ -740,39 +380,40 @@ impl<'a> Widget for SearchWidget<'a> {
 }
 
 /// This is the main container widget for the app
-struct MainScreen<'a> {
-    ctx: RefCtx<'a>,
-}
+struct MainWidget {}
 
-impl<'a> MainScreen<'a> {
-    fn process_key(&mut self, event: &KeyEvent) -> bool {
+impl MainWidget {
+    fn process_key(&mut self, event: &KeyEvent, state: &mut State) -> bool {
         match event {
             KeyEvent {
                 key: KeyCode::Char('/'),
                 ..
             } => {
-                self.ctx.activate_search();
+                state.open_search();
                 true
             }
             KeyEvent {
                 key: KeyCode::Char('N'),
                 ..
             } => {
-                self.ctx.search.borrow_mut().select_prev();
+                state.search.select_prev(&mut state.view);
                 true
             }
             KeyEvent {
                 key: KeyCode::Char('n'),
                 ..
             } => {
-                self.ctx.search.borrow_mut().select_next();
+                state.search.select_next(&mut state.view);
                 true
             }
             KeyEvent {
                 key: KeyCode::Enter,
                 ..
             } => {
-                self.ctx.search.borrow_mut().open_selected();
+                if let Err(_) = state.search.open_selected(&mut state.view) {
+                    todo!();
+                    // state.last_error = Some("HEY".to_string());
+                }
                 true
             }
             KeyEvent {
@@ -784,7 +425,7 @@ impl<'a> MainScreen<'a> {
                 ..
             } => {
                 // Quit the app when Ctrl-c or q are pressed
-                self.ctx.quit.set(true);
+                state.shared.borrow_mut().quit = true;
                 true
             }
             _ => false,
@@ -792,20 +433,24 @@ impl<'a> MainScreen<'a> {
     }
 }
 
-impl<'a> Widget for MainScreen<'a> {
-    fn render(&mut self, _args: &mut RenderArgs) {}
+impl Widget<State> for MainWidget {
+    fn render(&mut self, _args: &mut RenderArgs, _state: &mut State) {}
 
-    fn get_size_constraints(&self) -> Constraints {
-        // Switch from default horizontal layout to vertical layout
+    fn get_size_constraints(&self, _state: &State) -> Constraints {
         let mut c = Constraints::default();
         c.child_orientation = ChildOrientation::Vertical;
         c
     }
 
-    fn process_event(&mut self, event: &WidgetEvent, _args: &mut UpdateArgs) -> bool {
+    fn process_event(
+        &mut self,
+        event: &WidgetEvent,
+        _args: &mut UpdateArgs,
+        state: &mut State,
+    ) -> bool {
         match event {
             WidgetEvent::Input(i) => match i {
-                InputEvent::Key(k) => self.process_key(k),
+                InputEvent::Key(k) => self.process_key(k, state),
                 _ => false,
             },
         }
@@ -821,7 +466,7 @@ mod tests {
     use super::*;
 
     struct Context<'a> {
-        ui: Ui<'a>,
+        ui: Ui<'a, State>,
         surface: Surface,
         visited: Rc<RefCell<Vec<String>>>,
     }
@@ -829,7 +474,7 @@ mod tests {
     fn create_test_ui(input: &str, width: usize, height: usize) -> Context {
         let visited = Rc::new(RefCell::new(vec![]));
         let ctx_visited = visited.clone();
-        let (mut ui, _) = create_ui(
+        let (mut ui, _, _) = create_ui(
             Box::new(Cursor::new(input.to_string())),
             width,
             height,
@@ -837,6 +482,7 @@ mod tests {
                 visited.borrow_mut().push(uri.to_string());
                 Ok(())
             }),
+            false,
         )
         .unwrap();
         let mut surface = Surface::new(width, height);

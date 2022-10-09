@@ -2,20 +2,25 @@ use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Result;
 use log::{debug, info};
+use state::Shared;
+use std::cell::RefCell;
 use std::env;
 use std::env::VarError;
 use std::io::stdin;
 use std::process;
 use std::process::Command;
+use std::rc::Rc;
 use termwiz::caps::Capabilities;
 use termwiz::input::InputEvent;
 use termwiz::surface::Change;
 use termwiz::widgets::Ui;
+use termwiz::widgets::WidgetId;
 
 use termwiz::terminal::buffered::BufferedTerminal;
 use termwiz::terminal::{new_terminal, Terminal};
 use termwiz::widgets::WidgetEvent;
 mod doc;
+mod state;
 mod ui;
 
 fn open(uri: &str) -> Result<()> {
@@ -49,24 +54,32 @@ fn open(uri: &str) -> Result<()> {
     }
 }
 
+pub struct Ids {
+    doc_id: WidgetId,
+    search_id: WidgetId,
+}
+
 struct Ate<'a, T: Terminal> {
-    ctx: ui::RefCtx<'a>,
     term: BufferedTerminal<T>,
-    ui: Ui<'a>,
+    ui: Ui<'a, crate::state::State>,
+    shared: Rc<RefCell<Shared>>,
+    ids: Ids,
 }
 
 impl<'a, T: Terminal> Ate<'a, T> {
     fn run(&mut self) -> Result<()> {
-        let mut open_first = env::var("ATE_OPEN_FIRST").is_ok();
-        debug!("Open first link?{}", open_first);
         loop {
             let size = self.term.terminal().get_screen_size()?;
-            self.ctx.term_height.set(size.rows);
+            self.shared.borrow_mut().term_height = size.rows;
             self.ui.process_event_queue()?;
-            if self.ctx.quit.get() {
+            if self.shared.borrow().quit {
                 break;
             }
-            self.ui.set_focus(self.ctx.focus.get());
+            self.ui.set_focus(if self.shared.borrow().searching {
+                self.ids.search_id
+            } else {
+                self.ids.doc_id
+            });
 
             // After updating and processing all of the widgets, compose them
             // and render them to the screen.
@@ -74,10 +87,6 @@ impl<'a, T: Terminal> Ate<'a, T> {
                 // We have more events to process immediately; don't block waiting
                 // for input below, but jump to the top of the loop to re-run the
                 // updates.
-                continue;
-            } else if open_first {
-                open_first = false;
-                self.ctx.open_selected();
                 continue;
             }
             // Compute an optimized delta to apply to the terminal and display it
@@ -92,7 +101,7 @@ impl<'a, T: Terminal> Ate<'a, T> {
                         self.term
                             .add_change(Change::ClearScreen(Default::default()));
                         self.term.resize(cols, rows);
-                        self.ctx.term_height.set(rows);
+                        self.shared.borrow_mut().term_height = rows;
                         self.ui.queue_event(WidgetEvent::Input(input));
                     }
                     _ => {
@@ -138,7 +147,22 @@ fn main() -> Result<()> {
     term.terminal().enter_alternate_screen()?;
     let size = term.terminal().get_screen_size()?;
 
-    let (ui, ctx) = ui::create_ui(Box::new(stdin()), size.cols, size.rows, Box::new(open))?;
+    let open_first = env::var("ATE_OPEN_FIRST").is_ok();
+    debug!("Open first link? {}", open_first);
 
-    Ate { ctx, term, ui }.run()
+    let (ui, shared, ids) = ui::create_ui(
+        Box::new(stdin()),
+        size.cols,
+        size.rows,
+        Box::new(open),
+        open_first,
+    )?;
+
+    Ate {
+        shared,
+        term,
+        ui,
+        ids,
+    }
+    .run()
 }

@@ -229,7 +229,7 @@ dependencies = [
 [[package]]
 name = "filedescriptor"
 version = "0.8.2"
-source = "git+https://github.com/wez/wezterm/?rev=c764888186bae1f3b683bf243fb599e3820d234f#c764888186bae1f3b683bf243fb599e3820d234f"
+source = "git+https://github.com/groves/wezterm/?branch=widget-ui-state#39bdcc09e3bec585ea173132d61d28b3d565a41a"
 dependencies = [
  "libc",
  "thiserror",
@@ -822,7 +822,7 @@ dependencies = [
 [[package]]
 name = "termwiz"
 version = "0.18.0"
-source = "git+https://github.com/wez/wezterm/?rev=c764888186bae1f3b683bf243fb599e3820d234f#c764888186bae1f3b683bf243fb599e3820d234f"
+source = "git+https://github.com/groves/wezterm/?branch=widget-ui-state#39bdcc09e3bec585ea173132d61d28b3d565a41a"
 dependencies = [
  "anyhow",
  "base64",
@@ -932,7 +932,7 @@ checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 [[package]]
 name = "vtparse"
 version = "0.6.2"
-source = "git+https://github.com/wez/wezterm/?rev=c764888186bae1f3b683bf243fb599e3820d234f#c764888186bae1f3b683bf243fb599e3820d234f"
+source = "git+https://github.com/groves/wezterm/?branch=widget-ui-state#39bdcc09e3bec585ea173132d61d28b3d565a41a"
 dependencies = [
  "utf8parse",
 ]
@@ -1012,7 +1012,7 @@ checksum = "1c38c045535d93ec4f0b4defec448e4291638ee608530863b1e2ba115d4fff7f"
 [[package]]
 name = "wezterm-bidi"
 version = "0.2.1"
-source = "git+https://github.com/wez/wezterm/?rev=c764888186bae1f3b683bf243fb599e3820d234f#c764888186bae1f3b683bf243fb599e3820d234f"
+source = "git+https://github.com/groves/wezterm/?branch=widget-ui-state#39bdcc09e3bec585ea173132d61d28b3d565a41a"
 dependencies = [
  "log",
  "wezterm-dynamic",
@@ -1021,7 +1021,7 @@ dependencies = [
 [[package]]
 name = "wezterm-color-types"
 version = "0.2.0"
-source = "git+https://github.com/wez/wezterm/?rev=c764888186bae1f3b683bf243fb599e3820d234f#c764888186bae1f3b683bf243fb599e3820d234f"
+source = "git+https://github.com/groves/wezterm/?branch=widget-ui-state#39bdcc09e3bec585ea173132d61d28b3d565a41a"
 dependencies = [
  "csscolorparser",
  "deltae",
@@ -1032,7 +1032,7 @@ dependencies = [
 [[package]]
 name = "wezterm-dynamic"
 version = "0.1.0"
-source = "git+https://github.com/wez/wezterm/?rev=c764888186bae1f3b683bf243fb599e3820d234f#c764888186bae1f3b683bf243fb599e3820d234f"
+source = "git+https://github.com/groves/wezterm/?branch=widget-ui-state#39bdcc09e3bec585ea173132d61d28b3d565a41a"
 dependencies = [
  "log",
  "ordered-float",
@@ -1044,7 +1044,7 @@ dependencies = [
 [[package]]
 name = "wezterm-dynamic-derive"
 version = "0.1.0"
-source = "git+https://github.com/wez/wezterm/?rev=c764888186bae1f3b683bf243fb599e3820d234f#c764888186bae1f3b683bf243fb599e3820d234f"
+source = "git+https://github.com/groves/wezterm/?branch=widget-ui-state#39bdcc09e3bec585ea173132d61d28b3d565a41a"
 dependencies = [
  "proc-macro2",
  "quote",
