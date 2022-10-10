@@ -18,7 +18,6 @@ In the video we:
 [hyperer]: https://github.com/groves/hyperer
 [ripgrep]: https://github.com/BurntSushi/ripgrep
 
-
 Installation
 ============
 [Install Rust], clone this repo, and run `cargo install` in your clone.
@@ -62,7 +61,6 @@ There's no guarantee that a program isn't emitting malformed links, but `ate` op
 `ate` expects to invoke this process and for it to open the file to edit in another window.
 For example, you can use [Vim's remote command][Vim remote] or [emacsclient] to do that.
 
-
 [Vim remote]: https://vimdoc.sourceforge.net/htmldoc/remote.html#--remote
 [emacsclient]: https://www.gnu.org/software/emacs/manual/html_node/emacs/Invoking-emacsclient.html
 
@@ -70,7 +68,6 @@ For example, you can use [Vim's remote command][Vim remote] or [emacsclient] to 
 To use one, download it, modify it if your system differs, and export `ATE_OPENER` as the full path to the script.
 
 [opener_examples]: https://github.com/groves/ate/tree/main/opener_examples
-
 
 ### `ATE_OPEN_FIRST`
 If defined, `ate` will open the first link it finds on starting.

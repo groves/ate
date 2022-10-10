@@ -264,28 +264,28 @@ impl SearchWidget {
                 key: KeyCode::Char(c),
                 modifiers: Modifiers::NONE | Modifiers::SHIFT,
             } => {
-                state.search.push_query_char(*c, &mut state.view);
+                state.search_mut().push_query_char(*c);
                 true
             }
             KeyEvent {
                 key: KeyCode::Backspace,
                 ..
             } => {
-                Some(state.search.pop_query_char(&mut state.view));
+                Some(state.search_mut().pop_query_char());
                 true
             }
             KeyEvent {
                 key: KeyCode::UpArrow,
                 ..
             } => {
-                Some(state.search.select_prev(&mut state.view));
+                Some(state.search_mut().select_prev());
                 true
             }
             KeyEvent {
                 key: KeyCode::DownArrow,
                 ..
             } => {
-                Some(state.search.select_next(&mut state.view));
+                Some(state.search_mut().select_next());
                 true
             }
             _ => false,
@@ -370,7 +370,7 @@ impl Widget<State> for SearchWidget {
             WidgetEvent::Input(i) => match i {
                 InputEvent::Key(k) => self.process_key(k, state),
                 InputEvent::Paste(s) => {
-                    state.search.push_query_str(&s, &mut state.view);
+                    state.search_mut().push_query_str(&s);
                     true
                 }
                 _ => false,
@@ -396,21 +396,21 @@ impl MainWidget {
                 key: KeyCode::Char('N'),
                 ..
             } => {
-                state.search.select_prev(&mut state.view);
+                state.search_mut().select_prev();
                 true
             }
             KeyEvent {
                 key: KeyCode::Char('n'),
                 ..
             } => {
-                state.search.select_next(&mut state.view);
+                state.search_mut().select_next();
                 true
             }
             KeyEvent {
                 key: KeyCode::Enter,
                 ..
             } => {
-                if let Err(_) = state.search.open_selected(&mut state.view) {
+                if let Err(_) = state.search_mut().open_selected() {
                     todo!();
                     // state.last_error = Some("HEY".to_string());
                 }

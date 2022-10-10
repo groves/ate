@@ -64,10 +64,17 @@ impl State {
         }
     }
 
+    pub fn search_mut(&mut self) -> SearchMutator {
+        SearchMutator {
+            search: &mut self.search,
+            view: &mut self.view,
+        }
+    }
+
     pub fn open_search(&mut self) {
         self.shared.borrow_mut().searching = true;
         self.search_activate_line = self.view.line;
-        self.search.activate(&mut self.view);
+        self.search_mut().activate();
     }
 
     pub fn close_search(&self) {
@@ -290,55 +297,12 @@ impl Search {
         &self.matches
     }
 
-    fn activate(&mut self, view: &mut DocumentView) {
-        self.set_selected_idx(self.selected_idx.unwrap_or(0), view)
-    }
-
-    pub fn open_selected(&mut self, view: &mut DocumentView) -> Result<()> {
-        if self.matches.len() == 0 {
-            return Ok(());
-        }
-        let selected_idx = match self.selected_idx {
-            Some(idx) => idx,
-            None => {
-                self.set_selected_idx(0, view);
-                0
-            }
-        };
-        let link = &self.doc.links[self.matches[selected_idx]];
-        let addr = link.link.uri();
-        info!("Opening {}", addr);
-        (self.open_link)(addr)
-    }
-
     fn set_selected_idx(&mut self, selected_idx: usize, view: &mut DocumentView) {
         if selected_idx < self.matches.len() {
             self.selected_idx = Some(selected_idx);
             let link = &self.doc.links[self.matches[selected_idx]];
             view.highlight(link.start, link.end)
         }
-    }
-
-    pub fn select_next(&mut self, view: &mut DocumentView) {
-        self.set_selected_idx(
-            if let Some(idx) = self.selected_idx {
-                idx + 1
-            } else {
-                0
-            },
-            view,
-        );
-    }
-
-    pub fn select_prev(&mut self, view: &mut DocumentView) {
-        self.set_selected_idx(
-            if let Some(idx) = self.selected_idx {
-                idx.saturating_sub(1)
-            } else {
-                0
-            },
-            view,
-        );
     }
 
     fn update_matches(&mut self, view: &mut DocumentView) {
@@ -363,19 +327,71 @@ impl Search {
         }
         self.set_selected_idx(new_selected_idx, view);
     }
+}
 
-    pub(crate) fn push_query_char(&mut self, c: char, view: &mut DocumentView) {
-        self.query.push(c);
-        self.update_matches(view);
+// Changing search requires updating view. This joins them to make it more straightforward
+pub struct SearchMutator<'a> {
+    search: &'a mut Search,
+    view: &'a mut DocumentView,
+}
+
+impl<'a> SearchMutator<'a> {
+    fn activate(&mut self) {
+        self.search
+            .set_selected_idx(self.search.selected_idx.unwrap_or(0), self.view)
     }
 
-    pub(crate) fn pop_query_char(&mut self, view: &mut DocumentView) {
-        self.query.pop();
-        self.update_matches(view);
+    pub fn open_selected(&mut self) -> Result<()> {
+        if self.search.matches.len() == 0 {
+            return Ok(());
+        }
+        let selected_idx = match self.search.selected_idx {
+            Some(idx) => idx,
+            None => {
+                self.search.set_selected_idx(0, self.view);
+                0
+            }
+        };
+        let link = &self.search.doc.links[self.search.matches[selected_idx]];
+        let addr = link.link.uri();
+        info!("Opening {}", addr);
+        (self.search.open_link)(addr)
     }
 
-    pub(crate) fn push_query_str(&mut self, s: &str, view: &mut DocumentView) {
-        self.query.push_str(s);
-        self.update_matches(view);
+    pub fn select_next(&mut self) {
+        self.search.set_selected_idx(
+            if let Some(idx) = self.search.selected_idx {
+                idx + 1
+            } else {
+                0
+            },
+            self.view,
+        );
+    }
+
+    pub fn select_prev(&mut self) {
+        self.search.set_selected_idx(
+            if let Some(idx) = self.search.selected_idx {
+                idx.saturating_sub(1)
+            } else {
+                0
+            },
+            self.view,
+        );
+    }
+
+    pub(crate) fn push_query_char(&mut self, c: char) {
+        self.search.query.push(c);
+        self.search.update_matches(self.view);
+    }
+
+    pub(crate) fn pop_query_char(&mut self) {
+        self.search.query.pop();
+        self.search.update_matches(self.view);
+    }
+
+    pub(crate) fn push_query_str(&mut self, s: &str) {
+        self.search.query.push_str(s);
+        self.search.update_matches(self.view);
     }
 }
