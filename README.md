@@ -73,6 +73,12 @@ To use one, download it, modify it if your system differs, and export `ATE_OPENE
 
 [opener_examples]: https://github.com/groves/ate/tree/main/opener_examples
 
+For example, if you have this run cloned at `~/dev/ate` and use NeoVim, you run a different command depending on your shell:
+* For `zsh` or `bash`: `export ATE_OPENER=~/dev/ate/opener_examples/nvim_opener.bash`
+* For `fish`: `set -xU ATE_OPENER ~/dev/ate/opener_examples/nvim_opener.bash`
+
+For `zsh` or `bash`, you'll also want to add it to your shell startup files to get it to show up in new shells.
+
 ### `ATE_OPEN_FIRST`
 If defined, `ate` will open the first link it finds on starting.
 I use this Bash script to run `cargo` and compile Rust:
