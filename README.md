@@ -26,6 +26,10 @@ Alternatively, if you're using the [Nix package manager], depend on the flake.ni
 [Install Rust]: https://www.rust-lang.org/tools/install
 [Nix package manager]: https://nixos.org/manual/nix/stable/introduction.html
 
+You may also want to install something to [get links] if you don't have a program you want to use with `ate`.
+
+[get links]: #getting-links
+
 Usage
 =====
 Send text to `ate`'s standard input, like via this pipe:
