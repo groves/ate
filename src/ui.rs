@@ -417,7 +417,7 @@ impl MainWidget {
                 true
             }
             KeyEvent {
-                key: KeyCode::Char('C'),
+                key: KeyCode::Char('c'),
                 modifiers: Modifiers::CTRL,
             }
             | KeyEvent {
