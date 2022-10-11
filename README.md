@@ -5,10 +5,14 @@ While it pages through text streams like existing terminal pagers, [less] has fa
 [terminal hyperlinks]: https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda
 [less]: https://github.com/gwsw/less
 
+Watch the video below for high-level usage and check out [why ate] for more on the motivation for the tool and how to use it.
+
+[why ate]: https://sevorg.org/posts/why_ate/
+
 
 https://user-images.githubusercontent.com/12270/194925821-a69e749d-798f-4702-b064-1a2978aeb8f3.mp4
 
-Unmute the video to hear narration or follow read it below:
+Unmute the video to hear narration or read it below:
 
 * Run [ripgrep] on the term `render` in this repo. We wrap ripgrep with [hyperer] to insert links to the matched files
 * Mouse over the links to show what was inserted
