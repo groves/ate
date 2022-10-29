@@ -76,7 +76,7 @@ To use one, download it, modify it if your system differs, and export `ATE_OPENE
 
 [opener_examples]: https://github.com/groves/ate/tree/main/opener_examples
 
-For example, if you have this run cloned at `~/dev/ate` and use NeoVim, you run a different command depending on your shell:
+For example, if you have this repo cloned at `~/dev/ate` and use NeoVim, you run a different command depending on your shell:
 * For `zsh` or `bash`: `export ATE_OPENER=~/dev/ate/opener_examples/nvim_opener.bash`
 * For `fish`: `set -xU ATE_OPENER ~/dev/ate/opener_examples/nvim_opener.bash`
 
