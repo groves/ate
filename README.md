@@ -36,7 +36,7 @@ You may also want to install something to [get links] if you don't have a progra
 Usage
 =====
 Send text to `ate`'s standard input, like via this pipe:
-`hyperer-rg --pretty | ate`
+`hyperer-rg --pretty <my_search> | ate`
 
 Or like this input redirection:
 
