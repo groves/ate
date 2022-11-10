@@ -7,8 +7,9 @@
 FILE_REGEX='^file://[^/]+(/[^#]+)#(.*)$'
 if [[ "$1" =~ $FILE_REGEX ]]; then
   FILE=${BASH_REMATCH[1]}
-  LINE=${BASH_REMATCH[2]}
-  code -g $FILE:$LINE
+  LINE_AND_MAYBE_COL=${BASH_REMATCH[2]}
+  # code will take a colon delimited column, so we can let it sort out if there's a column or not
+  code -g $FILE:$LINE_AND_MAYBE_COL
 else
   echo "Couldn't parse $1 as a file regexp"
 fi
