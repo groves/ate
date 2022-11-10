@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Uses https://neovim.io/doc/user/remote.html
-# Start nvim as `nvim --listen ~/.cache/nvim/server.pipe` 
 # If you're using a different address, modify this variable
 NVIM_LISTEN_ADDRESS=~/.cache/nvim/server.pipe 
+
+if [[ ! -e $NVIM_LISTEN_ADDRESS ]] ; then
+  echo "Start nvim as 'nvim --listen $NVIM_LISTEN_ADDRESS' separately to let ate open files remotely"
+  exit 1
+fi
 
 # From https://stackoverflow.com/a/45977232
 # Expects a file:// Regex and ignores the hostname
