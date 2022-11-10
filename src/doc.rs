@@ -10,6 +10,7 @@ use termwiz::hyperlink::Hyperlink;
 use termwiz::surface::Change;
 use termwiz::Error;
 
+#[derive(Debug)]
 pub struct LinkRange {
     pub start: usize,
     pub end: usize,

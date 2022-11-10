@@ -3,6 +3,7 @@ use crate::state::{DocumentView, Shared, State};
 use crate::Ids;
 use anyhow::Result;
 use finl_unicode::grapheme_clusters::Graphemes;
+use log::debug;
 use std::cell::RefCell;
 use std::cmp::min;
 use std::io::Read;
@@ -297,23 +298,16 @@ impl SearchWidget {
             return;
         }
         let selected_idx = state.search.selected_idx().unwrap_or(0);
-        let first_visible_idx = selected_idx.saturating_sub(height);
+        let first_visible_idx = selected_idx.saturating_sub(height - 1);
         let selected = &state.doc.links[state.search.matches()[selected_idx]];
         let highlights = vec![(selected.start, selected.end)];
         for i in first_visible_idx..(first_visible_idx + height) {
             if i >= state.search.matches().len() {
                 break;
             }
-            render_lines(
-                &state.doc,
-                &state.view,
-                state
-                    .view
-                    .find_line(state.doc.links[state.search.matches()[i]].start),
-                1,
-                &highlights,
-                changes,
-            );
+            let start = state.doc.links[state.search.matches()[i]].start;
+            let line = state.view.find_line(start);
+            render_lines(&state.doc, &state.view, line, 1, &highlights, changes);
             changes.push(Change::Text("\r\n".to_string()));
         }
     }

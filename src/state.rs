@@ -206,7 +206,7 @@ impl DocumentView {
     }
 
     pub fn find_line(&self, byte: usize) -> usize {
-        self.lines.partition_point(|l| l.start_byte < byte)
+        self.lines.partition_point(|l| l.start_byte <= byte) - 1
     }
 
     pub fn percent(&self) -> Option<u8> {
