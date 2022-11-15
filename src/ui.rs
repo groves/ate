@@ -3,7 +3,7 @@ use crate::state::{DocumentView, Shared, State};
 use crate::Ids;
 use anyhow::Result;
 use finl_unicode::grapheme_clusters::Graphemes;
-use log::debug;
+use log::{error, warn};
 use std::cell::RefCell;
 use std::cmp::min;
 use std::io::Read;
@@ -404,9 +404,9 @@ impl MainWidget {
                 key: KeyCode::Enter,
                 ..
             } => {
-                if let Err(_) = state.search_mut().open_selected() {
-                    todo!();
-                    // state.last_error = Some("HEY".to_string());
+                if let Err(e) = state.search_mut().open_selected() {
+                    warn!("Opening selection failed with {:?}", e);
+                    state.last_error = Some(format!("{}", e));
                 }
                 true
             }
