@@ -1,11 +1,11 @@
 //! This module provides some automatic layout functionality for widgets.
 //! The parameters are similar to those that you may have encountered
 //! in HTML, but do not fully recreate the layout model.
-use crate::{format_err, Error, Result};
 use cassowary::strength::{REQUIRED, STRONG, WEAK};
 use cassowary::WeightedRelation::*;
 use cassowary::{AddConstraintError, Expression, Solver, SuggestValueError, Variable};
 use std::collections::HashMap;
+use termwiz::{format_err, Error, Result};
 
 use crate::widgets::{Rect, WidgetId};
 

@@ -15,8 +15,8 @@ use termwiz::input::{InputEvent, KeyCode, KeyEvent};
 use termwiz::surface::{Change, Position::Absolute};
 use termwiz::surface::{CursorShape, CursorVisibility};
 
-use termwiz::widgets::layout::{ChildOrientation, Constraints};
-use termwiz::widgets::{ParentRelativeCoords, RenderArgs, Ui, UpdateArgs, Widget, WidgetEvent};
+use crate::widgets::layout::{ChildOrientation, Constraints};
+use crate::widgets::{ParentRelativeCoords, RenderArgs, Ui, UpdateArgs, Widget, WidgetEvent};
 
 pub fn create_ui<'a>(
     input: Box<dyn Read>,

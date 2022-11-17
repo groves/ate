@@ -1,3 +1,5 @@
+use crate::widgets::Ui;
+use crate::widgets::WidgetId;
 use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Result;
@@ -19,15 +21,14 @@ use termwiz::caps::Capabilities;
 use termwiz::input::InputEvent;
 use termwiz::surface::Change;
 use termwiz::terminal::SystemTerminal;
-use termwiz::widgets::Ui;
-use termwiz::widgets::WidgetId;
 
+use crate::widgets::WidgetEvent;
 use termwiz::terminal::buffered::BufferedTerminal;
 use termwiz::terminal::Terminal;
-use termwiz::widgets::WidgetEvent;
 mod doc;
 mod state;
 mod ui;
+mod widgets;
 
 fn open(uri: &str) -> Result<()> {
     let opener = match env::var("ATE_OPENER") {
