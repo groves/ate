@@ -6,7 +6,8 @@ license = "MIT"
 description = "It paginates and navigates"
 homepage = "https://github.com/groves/ate"
 repository = "https://github.com/groves/ate"
-
+categories = ["command-line-utilities"]
+keywords = ["terminal"]
 
 [dependencies]
 anyhow = "1.0.65"
