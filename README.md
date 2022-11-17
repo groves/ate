@@ -23,7 +23,7 @@ Unmute the video to hear narration or read it below:
 
 Installation
 ============
-[Install Rust], clone this repo, and run `cargo install` in your clone.
+[Install Rust] and run `cargo install ate-pager`.
 Alternatively, if you're using the [Nix package manager], depend on the flake.nix in this repo.
 
 [Install Rust]: https://www.rust-lang.org/tools/install
