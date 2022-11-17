@@ -1,3 +1,6 @@
+// We allow unused because this is our own little copy of library code.
+// See README.md in this directory
+#![allow(unused)]
 //! This module provides some automatic layout functionality for widgets.
 //! The parameters are similar to those that you may have encountered
 //! in HTML, but do not fully recreate the layout model.

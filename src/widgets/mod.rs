@@ -1,3 +1,6 @@
+// We allow unused because this is our own little copy of library code.
+// See README.md in this directory
+#![allow(unused)]
 // Ideally this would be scoped to WidgetId, but I can't seem to find the
 // right place for it to take effect
 #![allow(clippy::new_without_default)]
