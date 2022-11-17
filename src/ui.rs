@@ -3,7 +3,7 @@ use crate::state::{DocumentView, Shared, State};
 use crate::Ids;
 use anyhow::Result;
 use finl_unicode::grapheme_clusters::Graphemes;
-use log::{error, warn};
+use log::warn;
 use std::cell::RefCell;
 use std::cmp::min;
 use std::io::Read;

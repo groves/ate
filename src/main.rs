@@ -1,23 +1,29 @@
 use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Result;
+use backtrace::Backtrace;
+use log::error;
 use log::{debug, info};
 use state::Shared;
 use std::cell::RefCell;
 use std::env;
 use std::env::VarError;
 use std::io::stdin;
+use std::panic;
 use std::process;
 use std::process::Command;
 use std::rc::Rc;
+use std::sync::Mutex;
+use std::thread;
 use termwiz::caps::Capabilities;
 use termwiz::input::InputEvent;
 use termwiz::surface::Change;
+use termwiz::terminal::SystemTerminal;
 use termwiz::widgets::Ui;
 use termwiz::widgets::WidgetId;
 
 use termwiz::terminal::buffered::BufferedTerminal;
-use termwiz::terminal::{new_terminal, Terminal};
+use termwiz::terminal::Terminal;
 use termwiz::widgets::WidgetEvent;
 mod doc;
 mod state;
@@ -59,14 +65,17 @@ pub struct Ids {
     search_id: WidgetId,
 }
 
-struct Ate<'a, T: Terminal> {
-    term: BufferedTerminal<T>,
+struct Ate<'a> {
+    term: BufferedTerminal<SystemTerminal>,
     ui: Ui<'a, crate::state::State>,
     shared: Rc<RefCell<Shared>>,
     ids: Ids,
+    // Fields are dropped in declaration order.
+    // Sticking this here gets it to be dropped after term.
+    _ld: DropLast,
 }
 
-impl<'a, T: Terminal> Ate<'a, T> {
+impl<'a> Ate<'a> {
     fn run(&mut self) -> Result<()> {
         loop {
             let size = self.term.terminal().get_screen_size()?;
@@ -119,6 +128,21 @@ impl<'a, T: Terminal> Ate<'a, T> {
     }
 }
 
+// A message created by our panic hook if it ran
+static PANIC_MESSAGE: Mutex<Option<String>> = Mutex::new(None);
+
+struct DropLast {}
+impl Drop for DropLast {
+    fn drop(&mut self) {
+        // If our hook set a message, print it here.
+        // We're running after SystemTerminal has been dropped.
+        // That means we'll be out of the alternate screen.
+        if let Some(message) = PANIC_MESSAGE.lock().unwrap().take() {
+            eprintln!("{message}");
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let xdg_dirs = xdg::BaseDirectories::with_prefix("ate")?;
     fern::Dispatch::new()
@@ -141,10 +165,51 @@ fn main() -> Result<()> {
     }
 
     let caps = Capabilities::new_from_env()?;
-    let underlying_term = new_terminal(caps)?;
+    let underlying_term = SystemTerminal::new(caps)?;
     let mut term = BufferedTerminal::new(underlying_term)?;
     term.terminal().set_raw_mode()?;
     term.terminal().enter_alternate_screen()?;
+
+    // We can't use the default panic handler.
+    // It prints to stderr immediately aand we'll be in the alternate screen after this.
+    // Printing to stderr is lost when returning to the main screen.
+    panic::set_hook(Box::new(|info| {
+        // Build a description of the panic.
+        // This is essentially https://github.com/sfackler/rust-log-panics/blob/e1b352b61c03a8a87cc647815d5eddb98829882f/src/lib.rs#L115
+        // That doesn't allow calling to get the message that would be logged.
+        // We want to print the description later, so we need to create the value ourselves here.
+        let bt = Backtrace::new();
+        let thread = thread::current();
+        let thread = thread.name().unwrap_or("<unnamed>");
+        let msg = match info.payload().downcast_ref::<&'static str>() {
+            Some(s) => *s,
+            None => match info.payload().downcast_ref::<String>() {
+                Some(s) => &**s,
+                None => "Box<Any>",
+            },
+        };
+        let formatted = match info.location() {
+            Some(location) => {
+                format!(
+                    "thread '{}' panicked at '{}': {}:{}\n{:?}",
+                    thread,
+                    msg,
+                    location.file(),
+                    location.line(),
+                    bt,
+                )
+            }
+            None => {
+                format!("thread '{}' panicked at '{}'\n{:?}", thread, msg, bt,)
+            }
+        };
+        // Log the panic message we created
+        error!("{formatted}");
+        // Store the message for to print to stderr after exiting the alternate screen
+        let mut pmsg = PANIC_MESSAGE.lock().unwrap();
+        *pmsg = Some(formatted);
+    }));
+
     let size = term.terminal().get_screen_size()?;
 
     let open_first = env::var("ATE_OPEN_FIRST").is_ok();
@@ -163,6 +228,7 @@ fn main() -> Result<()> {
         term,
         ui,
         ids,
+        _ld: DropLast {},
     }
     .run()
 }
