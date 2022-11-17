@@ -1,6 +1,6 @@
 [package]
 name = "ate-pager"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "It paginates and navigates"
@@ -21,3 +21,7 @@ fnv = "1.0"
 log = "0.4.17"
 termwiz = "0.19"
 xdg = "2.4.1"
+
+[[bin]]
+name = "ate"
+path = "src/main.rs"
