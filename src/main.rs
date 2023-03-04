@@ -19,6 +19,9 @@ use std::sync::Mutex;
 use std::thread;
 use termwiz::caps::Capabilities;
 use termwiz::input::InputEvent;
+use termwiz::input::KeyCode;
+use termwiz::input::KeyEvent;
+use termwiz::input::Modifiers;
 use termwiz::surface::Change;
 use termwiz::terminal::SystemTerminal;
 
@@ -213,16 +216,24 @@ fn main() -> Result<()> {
 
     let size = term.terminal().get_screen_size()?;
 
-    let open_first = env::var("ATE_OPEN_FIRST").is_ok();
-    debug!("Open first link? {}", open_first);
+    let (mut ui, shared, ids) =
+        ui::create_ui(Box::new(stdin()), size.cols, size.rows, Box::new(open))?;
 
-    let (ui, shared, ids) = ui::create_ui(
-        Box::new(stdin()),
-        size.cols,
-        size.rows,
-        Box::new(open),
-        open_first,
-    )?;
+    if env::var("ATE_OPEN_FIRST").is_ok() {
+        debug!("Opening first link");
+        ui.queue_event(WidgetEvent::Input(InputEvent::Key(KeyEvent {
+            key: KeyCode::Enter,
+            modifiers: Modifiers::NONE,
+        })));
+    }
+
+    if env::var("ATE_GOTO_LAST").is_ok() {
+        debug!("Going to last link");
+        ui.queue_event(WidgetEvent::Input(InputEvent::Key(KeyEvent {
+            key: KeyCode::Char('N'),
+            modifiers: Modifiers::NONE,
+        })));
+    }
 
     Ate {
         shared,

@@ -23,7 +23,6 @@ pub fn create_ui<'a>(
     width: usize,
     height: usize,
     open_link: Box<dyn FnMut(&str) -> Result<()>>,
-    open_first: bool,
 ) -> Result<(Ui<'a, State>, Rc<RefCell<Shared>>, Ids)> {
     let doc = Rc::new(Document::new(input)?);
     let state = State::new(doc, open_link, width, height);
@@ -41,12 +40,6 @@ pub fn create_ui<'a>(
         rows: height,
     }));
     ui.process_event_queue()?;
-    if open_first {
-        ui.queue_event(WidgetEvent::Input(InputEvent::Key(KeyEvent {
-            key: KeyCode::Enter,
-            modifiers: Modifiers::NONE,
-        })));
-    }
     Ok((ui, shared, Ids { doc_id, search_id }))
 }
 
@@ -328,7 +321,7 @@ impl Widget<State> for SearchWidget {
                 y: Absolute(0),
             },
         ];
-        if height > 1 {
+        if height > 3 {
             changes.push(Change::Text(format!("{}\r\n", "━".repeat(width))));
             self.render_matches(height - 2, &mut changes, state);
         }
@@ -476,7 +469,6 @@ mod tests {
                 visited.borrow_mut().push(uri.to_string());
                 Ok(())
             }),
-            false,
         )
         .unwrap();
         let mut surface = Surface::new(width, height);

@@ -360,10 +360,9 @@ impl<'a> SearchMutator<'a> {
 
     pub fn select_next(&mut self) {
         self.search.set_selected_idx(
-            if let Some(idx) = self.search.selected_idx {
-                idx + 1
-            } else {
-                0
+            match self.search.selected_idx {
+                Some(idx) if idx < self.search.matches.len().saturating_sub(1) => idx + 1,
+                _ => 0,
             },
             self.view,
         );
@@ -371,10 +370,9 @@ impl<'a> SearchMutator<'a> {
 
     pub fn select_prev(&mut self) {
         self.search.set_selected_idx(
-            if let Some(idx) = self.search.selected_idx {
-                idx.saturating_sub(1)
-            } else {
-                0
+            match self.search.selected_idx {
+                Some(0) | None => self.search.matches.len().saturating_sub(1),
+                Some(idx) => idx - 1,
             },
             self.view,
         );
