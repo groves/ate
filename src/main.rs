@@ -45,7 +45,7 @@ fn open(uri: &str) -> Result<()> {
         // Don't use anyhow::context as it adds newlines
         Err(e) => bail!("Failed to run ATE_OPENER {}: {}", opener, e),
     };
-    info!("ATE_OPENER stdout={}", String::from_utf8(output.stdout)?);
+    println!("{}", String::from_utf8(output.stdout)?);
     let stderr = String::from_utf8(output.stderr)?;
     info!("ATE_OPENER stderr={}", stderr);
     match output.status.code() {
