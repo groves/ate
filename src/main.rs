@@ -76,7 +76,7 @@ struct Ate<'a> {
     ids: Ids,
     // Fields are dropped in declaration order.
     // Sticking this here gets it to be dropped after term.
-    _ld: DropLast,
+    _dl: DropLast,
 }
 
 impl<'a> Ate<'a> {
@@ -240,7 +240,7 @@ fn main() -> Result<()> {
         term,
         ui,
         ids,
-        _ld: DropLast {},
+        _dl: DropLast {},
     }
     .run()
 }
