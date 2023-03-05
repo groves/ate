@@ -496,7 +496,7 @@ impl Widget<State> for MainWidget {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, fs, io::Cursor, rc::Rc};
+    use std::{cell::RefCell, io::Cursor, rc::Rc};
 
     use termwiz::{color::ColorAttribute, input::Modifiers, surface::Surface};
 
@@ -627,14 +627,12 @@ mod tests {
 
     #[test]
     fn next_links() {
-        setup_logging().unwrap();
         let input = "0
 \x1b]8;;1\x1b\\1\x1b]8;;2\x1b\\
 2
 \x1b]8;;3\x1b\\3
 \x1b]8;;\x1b\\4
 \x1b]8;;5\x1b\\5";
-        fs::write("six_lines", input).unwrap();
         let mut ctx = create_test_ui(input, 10, 13);
 
         // Nothing should be highlighted
@@ -657,13 +655,56 @@ mod tests {
         // Wrap back!
         ctx.press_keys(vec![KeyCode::Char('N')]);
         check_rev(&mut ctx, 3);
+    }
+
+    fn check_search(ctx: &mut Context, lines: Vec<&str>) {
+        let cells = &ctx.surface.screen_cells();
+        for (i, l) in lines.iter().enumerate() {
+            assert_eq!(
+                format!("{}", l),
+                cells[cells.len() - 2 - lines.len() + i][0].str(),
+                "cl {} ll {} i {}",
+                cells.len(),
+                lines.len(),
+                i
+            );
+        }
+        assert_eq!(
+            if lines.len() > 0 { "━" } else { " " },
+            cells[cells.len() - 3 - lines.len()][0].str()
+        );
+        assert_eq!("S", cells[cells.len() - 2][0].str());
+    }
+
+    #[test]
+    fn search() {
+        let input = "0
+\x1b]8;;1\x1b\\1\x1b]8;;2\x1b\\
+2
+\x1b]8;;3\x1b\\3
+\x1b]8;;\x1b\\4
+\x1b]8;;5\x1b\\5";
+        let mut ctx = create_test_ui(input, 10, 13);
+
+        // Nothing should be highlighted
+        check_rev(&mut ctx, usize::MAX);
+
+        // opening search selects the first item
+        ctx.press_keys(vec![KeyCode::Char('/')]);
+        check_rev(&mut ctx, 1);
+        // TODO - 2 renders as 1 in the second item in search as its link starts on 1s line and
+        // we display the line of the first char. It should likely eat whitespace to find the
+        // start for search display
+        check_search(&mut ctx, vec!["1", "1", "3", "5"]);
 
         // Search for missing character doesn't change highlight
-        ctx.press_keys(vec![KeyCode::Char('/'), KeyCode::Char('6')]);
-        check_rev(&mut ctx, 3);
+        ctx.press_keys(vec![KeyCode::Char('6')]);
+        check_search(&mut ctx, vec![]);
+        check_rev(&mut ctx, 1);
 
         // Search for a different character changes highlight
-        ctx.press_keys(vec![KeyCode::Backspace, KeyCode::Char('1')]);
-        check_rev(&mut ctx, 1);
+        ctx.press_keys(vec![KeyCode::Backspace, KeyCode::Char('3')]);
+        check_search(&mut ctx, vec![]);
+        check_rev(&mut ctx, 3);
     }
 }
