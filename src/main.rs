@@ -1,20 +1,15 @@
-use crate::widgets::Ui;
-use crate::widgets::WidgetId;
 use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Result;
 use backtrace::Backtrace;
 use log::error;
 use log::{debug, info};
-use state::Shared;
-use std::cell::RefCell;
 use std::env;
 use std::env::VarError;
 use std::io::stdin;
 use std::panic;
 use std::process;
 use std::process::Command;
-use std::rc::Rc;
 use std::sync::Mutex;
 use std::thread;
 use termwiz::caps::Capabilities;
@@ -24,6 +19,8 @@ use termwiz::input::KeyEvent;
 use termwiz::input::Modifiers;
 use termwiz::surface::Change;
 use termwiz::terminal::SystemTerminal;
+use ui::AteUi;
+use ui::StepNext;
 
 use crate::widgets::WidgetEvent;
 use termwiz::terminal::buffered::BufferedTerminal;
@@ -64,16 +61,9 @@ fn open(uri: &str) -> Result<()> {
     }
 }
 
-pub struct Ids {
-    doc_id: WidgetId,
-    search_id: WidgetId,
-}
-
 struct Ate<'a> {
     term: BufferedTerminal<SystemTerminal>,
-    ui: Ui<'a, crate::state::State>,
-    shared: Rc<RefCell<Shared>>,
-    ids: Ids,
+    ui: AteUi<'a>,
     // Fields are dropped in declaration order.
     // Sticking this here gets it to be dropped after term.
     _dl: DropLast,
@@ -81,27 +71,7 @@ struct Ate<'a> {
 
 impl<'a> Ate<'a> {
     fn run(&mut self) -> Result<()> {
-        loop {
-            let size = self.term.terminal().get_screen_size()?;
-            self.shared.borrow_mut().term_height = size.rows;
-            self.ui.process_event_queue()?;
-            if self.shared.borrow().quit {
-                break;
-            }
-            self.ui.set_focus(if self.shared.borrow().searching {
-                self.ids.search_id
-            } else {
-                self.ids.doc_id
-            });
-
-            // After updating and processing all of the widgets, compose them
-            // and render them to the screen.
-            if self.ui.render_to_screen(&mut self.term)? {
-                // We have more events to process immediately; don't block waiting
-                // for input below, but jump to the top of the loop to re-run the
-                // updates.
-                continue;
-            }
+        while let StepNext::WAIT = self.ui.step(&mut self.term)? {
             // Compute an optimized delta to apply to the terminal and display it
             self.term.flush()?;
 
@@ -114,7 +84,6 @@ impl<'a> Ate<'a> {
                         self.term
                             .add_change(Change::ClearScreen(Default::default()));
                         self.term.resize(cols, rows);
-                        self.shared.borrow_mut().term_height = rows;
                         self.ui.queue_event(WidgetEvent::Input(input));
                     }
                     _ => {
@@ -147,7 +116,7 @@ impl Drop for DropLast {
     }
 }
 
-fn main() -> Result<()> {
+fn setup_logging() -> Result<()> {
     let xdg_dirs = xdg::BaseDirectories::with_prefix("ate")?;
     fern::Dispatch::new()
         .format(|out, message, record| {
@@ -162,6 +131,10 @@ fn main() -> Result<()> {
         .level(log::LevelFilter::Debug)
         .chain(fern::log_file(xdg_dirs.place_state_file("log")?)?)
         .apply()?;
+    Ok(())
+}
+fn main() -> Result<()> {
+    setup_logging()?;
     info!("ate started");
     if atty::is(atty::Stream::Stdin) {
         eprintln!("ate displays data from stdin i.e. pipe or redirect to ate");
@@ -216,8 +189,7 @@ fn main() -> Result<()> {
 
     let size = term.terminal().get_screen_size()?;
 
-    let (mut ui, shared, ids) =
-        ui::create_ui(Box::new(stdin()), size.cols, size.rows, Box::new(open))?;
+    let mut ui = ui::create_ui(Box::new(stdin()), size.cols, size.rows, Box::new(open))?;
 
     if env::var("ATE_OPEN_FIRST").is_ok() {
         debug!("Opening first link");
@@ -236,10 +208,8 @@ fn main() -> Result<()> {
     }
 
     Ate {
-        shared,
         term,
         ui,
-        ids,
         _dl: DropLast {},
     }
     .run()

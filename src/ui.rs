@@ -1,6 +1,5 @@
 use crate::doc::Document;
 use crate::state::{DocumentView, Shared, State};
-use crate::Ids;
 use anyhow::Result;
 use finl_unicode::grapheme_clusters::Graphemes;
 use log::warn;
@@ -13,17 +12,19 @@ use termwiz::color::{AnsiColor, ColorAttribute};
 use termwiz::input::Modifiers;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
 use termwiz::surface::{Change, Position::Absolute};
-use termwiz::surface::{CursorShape, CursorVisibility};
+use termwiz::surface::{CursorShape, CursorVisibility, Surface};
 
 use crate::widgets::layout::{ChildOrientation, Constraints};
-use crate::widgets::{ParentRelativeCoords, RenderArgs, Ui, UpdateArgs, Widget, WidgetEvent};
+use crate::widgets::{
+    ParentRelativeCoords, RenderArgs, Ui, UpdateArgs, Widget, WidgetEvent, WidgetId,
+};
 
 pub fn create_ui<'a>(
     input: Box<dyn Read>,
     width: usize,
     height: usize,
     open_link: Box<dyn FnMut(&str) -> Result<()>>,
-) -> Result<(Ui<'a, State>, Rc<RefCell<Shared>>, Ids)> {
+) -> Result<AteUi<'a>> {
     let doc = Rc::new(Document::new(input)?);
     let state = State::new(doc, open_link, width, height);
     let shared = state.shared.clone();
@@ -40,7 +41,56 @@ pub fn create_ui<'a>(
         rows: height,
     }));
     ui.process_event_queue()?;
-    Ok((ui, shared, Ids { doc_id, search_id }))
+    Ok(AteUi {
+        ui,
+        shared,
+        doc_id,
+        search_id,
+    })
+}
+
+pub struct AteUi<'a> {
+    ui: Ui<'a, crate::state::State>,
+    shared: Rc<RefCell<Shared>>,
+    doc_id: WidgetId,
+    search_id: WidgetId,
+}
+
+pub enum StepNext {
+    QUIT,
+    WAIT,
+}
+
+impl<'a> AteUi<'a> {
+    pub fn step(&mut self, surface: &mut Surface) -> Result<StepNext> {
+        loop {
+            self.shared.borrow_mut().term_height = surface.dimensions().1;
+            self.ui.process_event_queue()?;
+            if self.shared.borrow().quit {
+                return Ok(StepNext::QUIT);
+            }
+            self.ui.set_focus(if self.shared.borrow().searching {
+                self.search_id
+            } else {
+                self.doc_id
+            });
+
+            // After updating and processing all of the widgets, compose them
+            // and render them to the screen.
+            if self.ui.render_to_screen(surface)? {
+                // We have more events to process immediately; don't block waiting
+                // for input below, but jump to the top of the loop to re-run the
+                // updates.
+                continue;
+            }
+            break;
+        }
+        Ok(StepNext::WAIT)
+    }
+
+    pub fn queue_event(&mut self, input: WidgetEvent) {
+        self.ui.queue_event(input);
+    }
 }
 
 fn render_lines(
@@ -450,10 +500,12 @@ mod tests {
 
     use termwiz::{color::ColorAttribute, input::Modifiers, surface::Surface};
 
+    use crate::setup_logging;
+
     use super::*;
 
     struct Context<'a> {
-        ui: Ui<'a, State>,
+        ui: AteUi<'a>,
         surface: Surface,
         visited: Rc<RefCell<Vec<String>>>,
     }
@@ -467,15 +519,14 @@ mod tests {
                         modifiers: Modifiers::NONE,
                     })));
             }
-            self.ui.process_event_queue().unwrap();
-            self.ui.render_to_screen(&mut self.surface).unwrap();
+            self.ui.step(&mut self.surface).unwrap();
         }
     }
 
     fn create_test_ui(input: &str, width: usize, height: usize) -> Context {
         let visited = Rc::new(RefCell::new(vec![]));
         let ctx_visited = visited.clone();
-        let (mut ui, _, _) = create_ui(
+        let mut ui = create_ui(
             Box::new(Cursor::new(input.to_string())),
             width,
             height,
@@ -487,8 +538,8 @@ mod tests {
         .unwrap();
         let mut surface = Surface::new(width, height);
         // Render twice to test if we're stepping on ourselves
-        ui.render_to_screen(&mut surface).unwrap();
-        ui.render_to_screen(&mut surface).unwrap();
+        ui.step(&mut surface).unwrap();
+        ui.step(&mut surface).unwrap();
         Context {
             ui,
             visited: ctx_visited,
@@ -520,7 +571,6 @@ mod tests {
     fn page() {
         let input = "1\n2\n3\n4\n5\n6";
         let mut ctx = create_test_ui(input, 5, 6);
-        ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("1", cells[0].str());
 
@@ -577,6 +627,7 @@ mod tests {
 
     #[test]
     fn next_links() {
+        setup_logging().unwrap();
         let input = "0
 \x1b]8;;1\x1b\\1\x1b]8;;2\x1b\\
 2
@@ -584,7 +635,7 @@ mod tests {
 \x1b]8;;\x1b\\4
 \x1b]8;;5\x1b\\5";
         fs::write("six_lines", input).unwrap();
-        let mut ctx = create_test_ui(input, 10, 10);
+        let mut ctx = create_test_ui(input, 10, 13);
 
         // Nothing should be highlighted
         check_rev(&mut ctx, usize::MAX);
@@ -610,5 +661,9 @@ mod tests {
         // Search for missing character doesn't change highlight
         ctx.press_keys(vec![KeyCode::Char('/'), KeyCode::Char('6')]);
         check_rev(&mut ctx, 3);
+
+        // Search for a different character changes highlight
+        ctx.press_keys(vec![KeyCode::Backspace, KeyCode::Char('1')]);
+        check_rev(&mut ctx, 1);
     }
 }
