@@ -4,7 +4,7 @@ use anyhow::Result;
 use finl_unicode::grapheme_clusters::Graphemes;
 use log::warn;
 use std::cell::RefCell;
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::io::Read;
 use std::rc::Rc;
 use termwiz::cell::{grapheme_column_width, unicode_column_width, AttributeChange};
@@ -184,7 +184,7 @@ impl DocumentWidget {
                 key: KeyCode::Char(' '),
                 ..
             } => {
-                state.view.forward(state.view.height() - 2);
+                state.view.forward(max(state.view.height() - 2, 1));
                 true
             }
             KeyEvent {
@@ -499,8 +499,6 @@ mod tests {
     use std::{cell::RefCell, io::Cursor, rc::Rc};
 
     use termwiz::{color::ColorAttribute, input::Modifiers, surface::Surface};
-
-    use crate::setup_logging;
 
     use super::*;
 

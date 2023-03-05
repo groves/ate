@@ -1,8 +1,4 @@
-use std::{
-    cell::RefCell,
-    cmp::{max, min},
-    rc::Rc,
-};
+use std::{cell::RefCell, cmp::min, rc::Rc};
 
 use crate::doc::Document;
 use anyhow::Result;
@@ -157,21 +153,22 @@ impl DocumentView {
         self.make_line_visible(self.find_line(start));
     }
 
+    fn set_line(&mut self, line: usize) {
+        self.line = min(self.lines.len().saturating_sub(self.height), line);
+    }
+
     pub fn backward(&mut self, lines: usize) {
-        self.line = self.line.saturating_sub(lines);
+        self.set_line(self.line.saturating_sub(lines));
     }
 
     pub fn forward(&mut self, lines: usize) {
-        self.line = min(
-            self.lines.len().saturating_sub(self.height),
-            self.line + max(1, lines),
-        );
+        self.set_line(self.line + lines);
     }
 
     fn make_line_visible(&mut self, line: usize) {
         debug!("Current {} New {}, End {}", self.line, line, self.height);
         if line.saturating_sub(3) < self.line || (line + 3) > (self.line + self.height) {
-            self.line = line.saturating_sub(3);
+            self.set_line(line.saturating_sub(3));
         }
     }
 
