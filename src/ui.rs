@@ -446,7 +446,7 @@ impl Widget<State> for MainWidget {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, io::Cursor, rc::Rc};
+    use std::{cell::RefCell, fs, io::Cursor, rc::Rc};
 
     use termwiz::{color::ColorAttribute, input::Modifiers, surface::Surface};
 
@@ -456,6 +456,20 @@ mod tests {
         ui: Ui<'a, State>,
         surface: Surface,
         visited: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl<'a> Context<'a> {
+        fn press_keys(&mut self, keys: Vec<KeyCode>) {
+            for key in keys {
+                self.ui
+                    .queue_event(WidgetEvent::Input(InputEvent::Key(KeyEvent {
+                        key,
+                        modifiers: Modifiers::NONE,
+                    })));
+            }
+            self.ui.process_event_queue().unwrap();
+            self.ui.render_to_screen(&mut self.surface).unwrap();
+        }
     }
 
     fn create_test_ui(input: &str, width: usize, height: usize) -> Context {
@@ -502,13 +516,6 @@ mod tests {
         assert_eq!(ctx.surface.screen_chars_to_string(), "Hi \nBye\n 0%\n");
     }
 
-    fn press_char_event(c: char) -> WidgetEvent {
-        WidgetEvent::Input(InputEvent::Key(KeyEvent {
-            key: KeyCode::Char(c),
-            modifiers: Modifiers::NONE,
-        }))
-    }
-
     #[test]
     fn page() {
         let input = "1\n2\n3\n4\n5\n6";
@@ -517,11 +524,8 @@ mod tests {
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("1", cells[0].str());
 
-        ctx.ui.queue_event(press_char_event(' '));
         // Going forward while at the last screen shouldn't keep the whole screen
-        ctx.ui.queue_event(press_char_event(' '));
-        ctx.ui.process_event_queue().unwrap();
-        ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
+        ctx.press_keys(vec![KeyCode::Char(' '), KeyCode::Char(' ')]);
         let screen = ctx.surface.screen_chars_to_string();
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("2", cells[0].str(), "{}", screen);
@@ -530,11 +534,8 @@ mod tests {
             "2    \n3    \n4    \n5    \n6    \n 100%\n"
         );
 
-        ctx.ui.queue_event(press_char_event('b'));
         // Going back while at the first line should stay at the first line
-        ctx.ui.queue_event(press_char_event('b'));
-        ctx.ui.process_event_queue().unwrap();
-        ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
+        ctx.press_keys(vec![KeyCode::Char('b'), KeyCode::Char('b')]);
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("1", cells[0].str());
         assert_eq!(
@@ -556,13 +557,7 @@ mod tests {
         assert!(!cells[1].attrs().reverse());
         assert_eq!(0, ctx.visited.borrow().len());
 
-        ctx.ui
-            .queue_event(WidgetEvent::Input(InputEvent::Key(KeyEvent {
-                key: KeyCode::Enter,
-                modifiers: Modifiers::NONE,
-            })));
-        ctx.ui.process_event_queue().unwrap();
-        ctx.ui.render_to_screen(&mut ctx.surface).unwrap();
+        ctx.press_keys(vec![KeyCode::Enter]);
         let cells = &ctx.surface.screen_cells()[0];
         assert_eq!("B", cells[0].str());
         let cells = &ctx.surface.screen_cells()[1];
@@ -570,5 +565,50 @@ mod tests {
         assert!(cells[0].attrs().reverse());
         assert!(cells[1].attrs().reverse());
         assert_eq!(vec!["http://a.b".to_string()], *ctx.visited.borrow());
+    }
+
+    fn check_rev(ctx: &mut Context, reversed: usize) {
+        let cells = &ctx.surface.screen_cells();
+        for i in 0..6 {
+            assert_eq!(format!("{}", i), cells[i][0].str());
+            assert_eq!(i == reversed, cells[i][0].attrs().reverse(), "i = {}", i);
+        }
+    }
+
+    #[test]
+    fn next_links() {
+        let input = "0
+\x1b]8;;1\x1b\\1\x1b]8;;2\x1b\\
+2
+\x1b]8;;3\x1b\\3
+\x1b]8;;\x1b\\4
+\x1b]8;;5\x1b\\5";
+        fs::write("six_lines", input).unwrap();
+        let mut ctx = create_test_ui(input, 10, 10);
+
+        // Nothing should be highlighted
+        check_rev(&mut ctx, usize::MAX);
+
+        ctx.press_keys(vec![KeyCode::Char('n'), KeyCode::Char('n')]);
+        check_rev(&mut ctx, 2);
+
+        ctx.press_keys(vec![KeyCode::Char('n'), KeyCode::Char('n')]);
+        check_rev(&mut ctx, 5);
+
+        // Wrap!
+        ctx.press_keys(vec![KeyCode::Char('n')]);
+        check_rev(&mut ctx, 1);
+
+        // Wrap back!
+        ctx.press_keys(vec![KeyCode::Char('N')]);
+        check_rev(&mut ctx, 5);
+
+        // Wrap back!
+        ctx.press_keys(vec![KeyCode::Char('N')]);
+        check_rev(&mut ctx, 3);
+
+        // Search for missing character doesn't change highlight
+        ctx.press_keys(vec![KeyCode::Char('/'), KeyCode::Char('6')]);
+        check_rev(&mut ctx, 3);
     }
 }
