@@ -1,0 +1,103 @@
+[0m[35msrc/doc.rs[0m
+]8;line=3:column=5;file://lop.local/Users/groves/dev/ate/src/doc.rs#3:5\[0m[32m3[0m:use [0m[1m[31mterm[0mwiz::cell::{AttributeChange, CellAttributes};
+]8;;\]8;line=4:column=5;file://lop.local/Users/groves/dev/ate/src/doc.rs#4:5\[0m[32m4[0m:use [0m[1m[31mterm[0mwiz::escape::csi::Sgr;
+]8;;\]8;line=5:column=5;file://lop.local/Users/groves/dev/ate/src/doc.rs#5:5\[0m[32m5[0m:use [0m[1m[31mterm[0mwiz::escape::parser::Parser;
+]8;;\]8;line=6:column=5;file://lop.local/Users/groves/dev/ate/src/doc.rs#6:5\[0m[32m6[0m:use [0m[1m[31mterm[0mwiz::escape::Action::{self, Control, Print};
+]8;;\]8;line=7:column=5;file://lop.local/Users/groves/dev/ate/src/doc.rs#7:5\[0m[32m7[0m:use [0m[1m[31mterm[0mwiz::escape::ControlCode::LineFeed;
+]8;;\]8;line=8:column=5;file://lop.local/Users/groves/dev/ate/src/doc.rs#8:5\[0m[32m8[0m:use [0m[1m[31mterm[0mwiz::escape::{OperatingSystemCommand, CSI};
+]8;;\]8;line=9:column=5;file://lop.local/Users/groves/dev/ate/src/doc.rs#9:5\[0m[32m9[0m:use [0m[1m[31mterm[0mwiz::hyperlink::Hyperlink;
+]8;;\]8;line=10:column=5;file://lop.local/Users/groves/dev/ate/src/doc.rs#10:5\[0m[32m10[0m:use [0m[1m[31mterm[0mwiz::surface::Change;
+]8;;\]8;line=11:column=5;file://lop.local/Users/groves/dev/ate/src/doc.rs#11:5\[0m[32m11[0m:use [0m[1m[31mterm[0mwiz::Error;
+]8;;\]8;line=59:column=66;file://lop.local/Users/groves/dev/ate/src/doc.rs#59:66\[0m[32m59[0m:                            // TODO - add an Attribute change to [0m[1m[31mterm[0mwiz for vertical align
+]8;;\
+[0m[35msrc/widgets/mod.rs[0m
+]8;line=10:column=5;file://lop.local/Users/groves/dev/ate/src/widgets/mod.rs#10:5\[0m[32m10[0m:use [0m[1m[31mterm[0mwiz::color::ColorAttribute;
+]8;;\]8;line=11:column=5;file://lop.local/Users/groves/dev/ate/src/widgets/mod.rs#11:5\[0m[32m11[0m:use [0m[1m[31mterm[0mwiz::input::InputEvent;
+]8;;\]8;line=12:column=5;file://lop.local/Users/groves/dev/ate/src/widgets/mod.rs#12:5\[0m[32m12[0m:use [0m[1m[31mterm[0mwiz::surface::{Change, CursorShape, CursorVisibility, Position, SequenceNo, Surface};
+]8;;\]8;line=13:column=5;file://lop.local/Users/groves/dev/ate/src/widgets/mod.rs#13:5\[0m[32m13[0m:use [0m[1m[31mterm[0mwiz::Result;
+]8;;\
+[0m[35msrc/widgets/README.md[0m
+]8;line=1:column=19;file://lop.local/Users/groves/dev/ate/src/widgets/README.md#1:19\[0m[32m1[0m:This is a copy of [0m[1m[31mterm[0mwiz/widgets with the changes from https://github.com/wez/wez[0m[1m[31mterm[0m/pull/2608 applied.
+]8;;\]8;line=3:column=47;file://lop.local/Users/groves/dev/ate/src/widgets/README.md#3:47\[0m[32m3[0m:Having a vendored copy lets me use a released [0m[1m[31mterm[0mwiz for everything else while we work on getting a state handling solution into [0m[1m[31mterm[0mwiz proper.
+]8;;\
+[0m[35msrc/widgets/layout.rs[0m
+]8;line=11:column=5;file://lop.local/Users/groves/dev/ate/src/widgets/layout.rs#11:5\[0m[32m11[0m:use [0m[1m[31mterm[0mwiz::{format_err, Error, Result};
+]8;;\
+[0m[35msrc/ui.rs[0m
+]8;line=10:column=5;file://lop.local/Users/groves/dev/ate/src/ui.rs#10:5\[0m[32m10[0m:use [0m[1m[31mterm[0mwiz::cell::{grapheme_column_width, unicode_column_width, AttributeChange};
+]8;;\]8;line=11:column=5;file://lop.local/Users/groves/dev/ate/src/ui.rs#11:5\[0m[32m11[0m:use [0m[1m[31mterm[0mwiz::color::{AnsiColor, ColorAttribute};
+]8;;\]8;line=12:column=5;file://lop.local/Users/groves/dev/ate/src/ui.rs#12:5\[0m[32m12[0m:use [0m[1m[31mterm[0mwiz::input::Modifiers;
+]8;;\]8;line=13:column=5;file://lop.local/Users/groves/dev/ate/src/ui.rs#13:5\[0m[32m13[0m:use [0m[1m[31mterm[0mwiz::input::{InputEvent, KeyCode, KeyEvent};
+]8;;\]8;line=14:column=5;file://lop.local/Users/groves/dev/ate/src/ui.rs#14:5\[0m[32m14[0m:use [0m[1m[31mterm[0mwiz::surface::{Change, Position::Absolute};
+]8;;\]8;line=15:column=5;file://lop.local/Users/groves/dev/ate/src/ui.rs#15:5\[0m[32m15[0m:use [0m[1m[31mterm[0mwiz::surface::{CursorShape, CursorVisibility, Surface};
+]8;;\]8;line=67:column=38;file://lop.local/Users/groves/dev/ate/src/ui.rs#67:38\[0m[32m67[0m:            self.shared.borrow_mut().[0m[1m[31mterm[0m_height = surface.dimensions().1;
+]8;;\]8;line=501:column=9;file://lop.local/Users/groves/dev/ate/src/ui.rs#501:9\[0m[32m501[0m:    use [0m[1m[31mterm[0mwiz::{color::ColorAttribute, input::Modifiers, surface::Surface};
+]8;;\
+[0m[35msrc/main.rs[0m
+]8;line=15:column=5;file://lop.local/Users/groves/dev/ate/src/main.rs#15:5\[0m[32m15[0m:use [0m[1m[31mterm[0mwiz::caps::Capabilities;
+]8;;\]8;line=16:column=5;file://lop.local/Users/groves/dev/ate/src/main.rs#16:5\[0m[32m16[0m:use [0m[1m[31mterm[0mwiz::input::InputEvent;
+]8;;\]8;line=17:column=5;file://lop.local/Users/groves/dev/ate/src/main.rs#17:5\[0m[32m17[0m:use [0m[1m[31mterm[0mwiz::input::KeyCode;
+]8;;\]8;line=18:column=5;file://lop.local/Users/groves/dev/ate/src/main.rs#18:5\[0m[32m18[0m:use [0m[1m[31mterm[0mwiz::input::KeyEvent;
+]8;;\]8;line=19:column=5;file://lop.local/Users/groves/dev/ate/src/main.rs#19:5\[0m[32m19[0m:use [0m[1m[31mterm[0mwiz::input::Modifiers;
+]8;;\]8;line=20:column=5;file://lop.local/Users/groves/dev/ate/src/main.rs#20:5\[0m[32m20[0m:use [0m[1m[31mterm[0mwiz::surface::Change;
+]8;;\]8;line=21:column=5;file://lop.local/Users/groves/dev/ate/src/main.rs#21:5\[0m[32m21[0m:use [0m[1m[31mterm[0mwiz::[0m[1m[31mterm[0minal::SystemTerminal;
+]8;;\]8;line=26:column=5;file://lop.local/Users/groves/dev/ate/src/main.rs#26:5\[0m[32m26[0m:use [0m[1m[31mterm[0mwiz::[0m[1m[31mterm[0minal::buffered::BufferedTerminal;
+]8;;\]8;line=27:column=5;file://lop.local/Users/groves/dev/ate/src/main.rs#27:5\[0m[32m27[0m:use [0m[1m[31mterm[0mwiz::[0m[1m[31mterm[0minal::Terminal;
+]8;;\]8;line=65:column=5;file://lop.local/Users/groves/dev/ate/src/main.rs#65:5\[0m[32m65[0m:    [0m[1m[31mterm[0m: BufferedTerminal<SystemTerminal>,
+]8;;\]8;line=68:column=55;file://lop.local/Users/groves/dev/ate/src/main.rs#68:55\[0m[32m68[0m:    // Sticking this here gets it to be dropped after [0m[1m[31mterm[0m.
+]8;;\]8;line=74:column=59;file://lop.local/Users/groves/dev/ate/src/main.rs#74:59\[0m[32m74[0m:        while let StepNext::WAIT = self.ui.step(&mut self.[0m[1m[31mterm[0m)? {
+]8;;\]8;line=75:column=59;file://lop.local/Users/groves/dev/ate/src/main.rs#75:59\[0m[32m75[0m:            // Compute an optimized delta to apply to the [0m[1m[31mterm[0minal and display it
+]8;;\]8;line=76:column=18;file://lop.local/Users/groves/dev/ate/src/main.rs#76:18\[0m[32m76[0m:            self.[0m[1m[31mterm[0m.flush()?;
+]8;;\]8;line=79:column=24;file://lop.local/Users/groves/dev/ate/src/main.rs#79:24\[0m[32m79[0m:            match self.[0m[1m[31mterm[0m.[0m[1m[31mterm[0minal().poll_input(None) {
+]8;;\]8;line=84:column=30;file://lop.local/Users/groves/dev/ate/src/main.rs#84:30\[0m[32m84[0m:                        self.[0m[1m[31mterm[0m
+]8;;\]8;line=86:column=30;file://lop.local/Users/groves/dev/ate/src/main.rs#86:30\[0m[32m86[0m:                        self.[0m[1m[31mterm[0m.resize(cols, rows);
+]8;;\]8;line=145:column=20;file://lop.local/Users/groves/dev/ate/src/main.rs#145:20\[0m[32m145[0m:    let underlying_[0m[1m[31mterm[0m = SystemTerminal::new(caps)?;
+]8;;\]8;line=146:column=13;file://lop.local/Users/groves/dev/ate/src/main.rs#146:13\[0m[32m146[0m:    let mut [0m[1m[31mterm[0m = BufferedTerminal::new(underlying_[0m[1m[31mterm[0m)?;
+]8;;\]8;line=147:column=5;file://lop.local/Users/groves/dev/ate/src/main.rs#147:5\[0m[32m147[0m:    [0m[1m[31mterm[0m.[0m[1m[31mterm[0minal().set_raw_mode()?;
+]8;;\]8;line=148:column=5;file://lop.local/Users/groves/dev/ate/src/main.rs#148:5\[0m[32m148[0m:    [0m[1m[31mterm[0m.[0m[1m[31mterm[0minal().enter_alternate_screen()?;
+]8;;\]8;line=190:column=16;file://lop.local/Users/groves/dev/ate/src/main.rs#190:16\[0m[32m190[0m:    let size = [0m[1m[31mterm[0m.[0m[1m[31mterm[0minal().get_screen_size()?;
+]8;;\]8;line=211:column=9;file://lop.local/Users/groves/dev/ate/src/main.rs#211:9\[0m[32m211[0m:        [0m[1m[31mterm[0m,
+]8;;\
+[0m[35msrc/state.rs[0m
+]8;line=11:column=5;file://lop.local/Users/groves/dev/ate/src/state.rs#11:5\[0m[32m11[0m:use [0m[1m[31mterm[0mwiz::{
+]8;;\]8;line=20:column=24;file://lop.local/Users/groves/dev/ate/src/state.rs#20:24\[0m[32m20[0m:    // We keep the raw [0m[1m[31mterm[0m height to be able to do fixed size layout.
+]8;;\]8;line=21:column=19;file://lop.local/Users/groves/dev/ate/src/state.rs#21:19\[0m[32m21[0m:    // TODO - fix [0m[1m[31mterm[0mwiz layout to get rid of this:
+]8;;\]8;line=22:column=34;file://lop.local/Users/groves/dev/ate/src/state.rs#22:34\[0m[32m22[0m:    // https://github.com/wez/wez[0m[1m[31mterm[0m/issues/2543
+]8;;\]8;line=23:column=9;file://lop.local/Users/groves/dev/ate/src/state.rs#23:9\[0m[32m23[0m:    pub [0m[1m[31mterm[0m_height: usize,
+]8;;\]8;line=28:column=12;file://lop.local/Users/groves/dev/ate/src/state.rs#28:12\[0m[32m28[0m:    fn new([0m[1m[31mterm[0m_height: usize) -> Self {
+]8;;\]8;line=31:column=13;file://lop.local/Users/groves/dev/ate/src/state.rs#31:13\[0m[32m31[0m:            [0m[1m[31mterm[0m_height,
+]8;;\]8;line=90:column=30;file://lop.local/Users/groves/dev/ate/src/state.rs#90:30\[0m[32m90[0m:        self.shared.borrow().[0m[1m[31mterm[0m_height as u16 - 1
+]8;;\
+[0m[35mREADME.md[0m
+]8;line=1:column=12;file://lop.local/Users/groves/dev/ate/README.md#1:12\[0m[32m1[0m:`ate` is a [0m[1m[31mterm[0minal pager that parses [[0m[1m[31mterm[0minal hyperlinks] and lets you search, move between, and open them.
+]8;;\]8;line=3:column=51;file://lop.local/Users/groves/dev/ate/README.md#3:51\[0m[32m3[0m:While it pages through text streams like existing [0m[1m[31mterm[0minal pagers, [less] has far more features for that use case.
+]8;;\]8;line=5:column=2;file://lop.local/Users/groves/dev/ate/README.md#5:2\[0m[32m5[0m:[[0m[1m[31mterm[0minal hyperlinks]: https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda
+]8;;\]8;line=17:column=24;file://lop.local/Users/groves/dev/ate/README.md#17:24\[0m[32m17[0m:* Run [ripgrep] on the [0m[1m[31mterm[0m `render` in this repo. We wrap ripgrep with [hyperer] to insert links to the matched files
+]8;;\]8;line=65:column=85;file://lop.local/Users/groves/dev/ate/README.md#65:85\[0m[32m65[0m:The link should be of the form `file://hostname/path#line number` according to [the [0m[1m[31mterm[0minal hyperlinks doc][[0m[1m[31mterm[0minal hyperlinks].
+]8;;\]8;line=92:column=33;file://lop.local/Users/groves/dev/ate/README.md#92:33\[0m[32m92[0m:# Print the cargo output to the [0m[1m[31mterm[0minal and to a temp file
+]8;;\]8;line=117:column=93;file://lop.local/Users/groves/dev/ate/README.md#117:93\[0m[32m117[0m:we can wrap existing programs, detect things that could be linked in their output, and emit [0m[1m[31mterm[0minal links around that text.
+]8;;\
+[0m[35mCargo.lock[0m
+]8;line=57:column=3;file://lop.local/Users/groves/dev/ate/Cargo.lock#57:3\[0m[32m57[0m: "[0m[1m[31mterm[0mwiz",
+]8;;\]8;line=168:column=3;file://lop.local/Users/groves/dev/ate/Cargo.lock#168:3\[0m[32m168[0m: "[0m[1m[31mterm[0mcolor",
+]8;;\]8;line=839:column=9;file://lop.local/Users/groves/dev/ate/Cargo.lock#839:9\[0m[32m839[0m:name = "[0m[1m[31mterm[0mcolor"
+]8;;\]8;line=848:column=9;file://lop.local/Users/groves/dev/ate/Cargo.lock#848:9\[0m[32m848[0m:name = "[0m[1m[31mterm[0minfo"
+]8;;\]8;line=861:column=9;file://lop.local/Users/groves/dev/ate/Cargo.lock#861:9\[0m[32m861[0m:name = "[0m[1m[31mterm[0mios"
+]8;;\]8;line=870:column=9;file://lop.local/Users/groves/dev/ate/Cargo.lock#870:9\[0m[32m870[0m:name = "[0m[1m[31mterm[0mwiz"
+]8;;\]8;line=898:column=3;file://lop.local/Users/groves/dev/ate/Cargo.lock#898:3\[0m[32m898[0m: "[0m[1m[31mterm[0minfo",
+]8;;\]8;line=899:column=3;file://lop.local/Users/groves/dev/ate/Cargo.lock#899:3\[0m[32m899[0m: "[0m[1m[31mterm[0mios",
+]8;;\]8;line=904:column=6;file://lop.local/Users/groves/dev/ate/Cargo.lock#904:6\[0m[32m904[0m: "wez[0m[1m[31mterm[0m-bidi",
+]8;;\]8;line=905:column=6;file://lop.local/Users/groves/dev/ate/Cargo.lock#905:6\[0m[32m905[0m: "wez[0m[1m[31mterm[0m-color-types",
+]8;;\]8;line=906:column=6;file://lop.local/Users/groves/dev/ate/Cargo.lock#906:6\[0m[32m906[0m: "wez[0m[1m[31mterm[0m-dynamic",
+]8;;\]8;line=1059:column=12;file://lop.local/Users/groves/dev/ate/Cargo.lock#1059:12\[0m[32m1059[0m:name = "wez[0m[1m[31mterm[0m-bidi"
+]8;;\]8;line=1065:column=6;file://lop.local/Users/groves/dev/ate/Cargo.lock#1065:6\[0m[32m1065[0m: "wez[0m[1m[31mterm[0m-dynamic",
+]8;;\]8;line=1069:column=12;file://lop.local/Users/groves/dev/ate/Cargo.lock#1069:12\[0m[32m1069[0m:name = "wez[0m[1m[31mterm[0m-color-types"
+]8;;\]8;line=1077:column=6;file://lop.local/Users/groves/dev/ate/Cargo.lock#1077:6\[0m[32m1077[0m: "wez[0m[1m[31mterm[0m-dynamic",
+]8;;\]8;line=1081:column=12;file://lop.local/Users/groves/dev/ate/Cargo.lock#1081:12\[0m[32m1081[0m:name = "wez[0m[1m[31mterm[0m-dynamic"
+]8;;\]8;line=1090:column=6;file://lop.local/Users/groves/dev/ate/Cargo.lock#1090:6\[0m[32m1090[0m: "wez[0m[1m[31mterm[0m-dynamic-derive",
+]8;;\]8;line=1094:column=12;file://lop.local/Users/groves/dev/ate/Cargo.lock#1094:12\[0m[32m1094[0m:name = "wez[0m[1m[31mterm[0m-dynamic-derive"
+]8;;\
+[0m[35mCargo.toml[0m
+]8;line=10:column=14;file://lop.local/Users/groves/dev/ate/Cargo.toml#10:14\[0m[32m10[0m:keywords = ["[0m[1m[31mterm[0minal"]
+]8;;\]8;line=22:column=1;file://lop.local/Users/groves/dev/ate/Cargo.toml#22:1\[0m[32m22[0m:[0m[1m[31mterm[0mwiz = "0.19"
+]8;;\

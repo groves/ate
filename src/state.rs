@@ -162,7 +162,7 @@ impl DocumentView {
     }
 
     pub fn forward(&mut self, lines: usize) {
-        self.set_line(self.line + lines);
+        self.set_line(self.line.saturating_add(lines));
     }
 
     fn make_line_visible(&mut self, line: usize) {

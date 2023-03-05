@@ -199,10 +199,10 @@ fn main() -> Result<()> {
         })));
     }
 
-    if env::var("ATE_GOTO_LAST").is_ok() {
-        debug!("Going to last link");
+    if env::var("ATE_GOTO_END").is_ok() {
+        debug!("Going to end");
         ui.queue_event(WidgetEvent::Input(InputEvent::Key(KeyEvent {
-            key: KeyCode::Char('N'),
+            key: KeyCode::Char('e'),
             modifiers: Modifiers::NONE,
         })));
     }

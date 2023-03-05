@@ -188,6 +188,13 @@ impl DocumentWidget {
                 true
             }
             KeyEvent {
+                key: KeyCode::Char('e'),
+                ..
+            } => {
+                state.view.forward(usize::MAX);
+                true
+            }
+            KeyEvent {
                 key: KeyCode::Char('b'),
                 ..
             } => {
